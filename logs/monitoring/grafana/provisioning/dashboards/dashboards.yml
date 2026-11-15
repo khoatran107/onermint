@@ -1,0 +1,11 @@
+# Load dashboards stored beside this provisioning file.
+apiVersion: 1
+providers:
+  - name: Lab01
+    folder: Lab01
+    type: file
+    disableDeletion: true
+    updateIntervalSeconds: 5
+    options:
+      path: /var/lib/grafana/dashboards
+

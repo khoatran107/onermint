@@ -13,6 +13,10 @@ REPO = Path(__file__).resolve().parent.parent
 
 
 def main():
+    if len(sys.argv) == 1:
+        print("Send bulk TX: python tests/send_bulk_transactions.py --config-dir config/demo --via 9 --count 20000 --rate 200")
+        print("The selected node must be honest and running. Use --help for more options.")
+        return
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--config-dir", type=Path, required=True,
                         help="prepared configuration directory of a running cluster")
@@ -51,7 +55,7 @@ def main():
     key_path = args.key_file
     if key_path is None:
         stamp = datetime.now().strftime("%Y%m%d-%H%M%S-%f")
-        key_path = directory / f"external-client-{stamp}.hex"
+        key_path = output.parent / f"external-client-{stamp}.hex"
     else:
         key_path = key_path.resolve()
     if key_path.exists():
@@ -59,10 +63,10 @@ def main():
 
     binary = REPO / "local-runs" / ("txload.exe" if os.name == "nt" else "txload")
     binary.parent.mkdir(exist_ok=True)
-    subprocess.run([args.go, "build", "-o", str(binary), "./src/cmd/txload"],
+    subprocess.run([args.go, "build", "-buildvcs=false", "-o", str(binary), "./src/cmd/txload"],
                    cwd=REPO, check=True)
     command = [
-        str(binary), "-config", str(configs[0]), "-key", str(key_path),
+        str(binary), "-config", str(configs[args.via]), "-key", str(key_path),
         "-via", str(args.via), "-count", str(args.count),
         "-rate", str(args.rate), "-value-size", str(args.value_size),
         "-record", args.record, "-retry", f"{args.retry_ms}ms",

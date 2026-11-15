@@ -6,6 +6,7 @@ import (
 	"crypto/ed25519"
 	"encoding/hex"
 	"encoding/json"
+	"io"
 	"net"
 	"net/http"
 	"os"
@@ -183,6 +184,81 @@ func TestLiveAdminInspection(t *testing.T) {
 	}
 	if status := get("/status", &statusView); status != http.StatusOK || statusView.NodeID != 0 || statusView.MempoolSize != 1 {
 		t.Fatalf("unexpected status response: %d %+v", status, statusView)
+	}
+	rpcCall := func(method string, params any, target any) *rpcError {
+		t.Helper()
+		payload, err := json.Marshal(map[string]any{"jsonrpc": "2.0", "id": 1, "method": method, "params": params})
+		if err != nil {
+			t.Fatal(err)
+		}
+		response, err := http.Post("http://"+adminAddress+"/rpc", "application/json", bytes.NewReader(payload))
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer response.Body.Close()
+		var result struct {
+			Result json.RawMessage `json:"result"`
+			Error  *rpcError       `json:"error"`
+		}
+		if err := json.NewDecoder(response.Body).Decode(&result); err != nil {
+			t.Fatal(err)
+		}
+		if result.Error == nil && target != nil {
+			if err := json.Unmarshal(result.Result, target); err != nil {
+				t.Fatal(err)
+			}
+		}
+		return result.Error
+	}
+	var rpcStatus rpcNodeStatus
+	if rpcErr := rpcCall("lab_status", map[string]any{}, &rpcStatus); rpcErr != nil || rpcStatus.NodeID != 0 || rpcStatus.FinalizedHeight != 0 || rpcStatus.ConsensusHeight != 1 || rpcStatus.MempoolTransactions != 1 || rpcStatus.Step == "" || rpcStatus.Lock != nil {
+		t.Fatalf("unexpected status RPC: %+v error=%v", rpcStatus, rpcErr)
+	}
+	var account struct {
+		CommittedNonce uint64 `json:"committedNonce"`
+		NextNonce      uint64 `json:"nextNonce"`
+	}
+	if rpcErr := rpcCall("lab_getAccount", map[string]any{"sender": hex.EncodeToString(pub[:])}, &account); rpcErr != nil || account.CommittedNonce != 0 || account.NextNonce != 2 {
+		t.Fatalf("unexpected account RPC: %+v error=%v", account, rpcErr)
+	}
+	tx2, err := crypt.SignTransaction(types.Transaction{ChainID: cfg.ChainID, Sender: pub, TargetKey: hex.EncodeToString(pub[:]) + "/live", Value: []byte("second"), Nonce: 2}, external)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var transactionID string
+	if rpcErr := rpcCall("lab_sendRawTransaction", map[string]any{"transaction": tx2}, &transactionID); rpcErr != nil || !strings.HasPrefix(transactionID, "0x") || len(transactionID) != 66 {
+		t.Fatalf("unexpected send RPC: id=%q error=%v", transactionID, rpcErr)
+	}
+	tx3, err := crypt.SignTransaction(types.Transaction{ChainID: cfg.ChainID, Sender: pub, TargetKey: hex.EncodeToString(pub[:]) + "/live", Value: []byte("third"), Nonce: 3}, external)
+	if err != nil {
+		t.Fatal(err)
+	}
+	rpcClient, err := NewJSONRPCClient("http://"+adminAddress, time.Second)
+	if err != nil {
+		t.Fatal(err)
+	}
+	clientCtx, stopRPC := context.WithTimeout(context.Background(), time.Second)
+	if _, err := rpcClient.Submit(clientCtx, tx3); err != nil {
+		stopRPC()
+		t.Fatal(err)
+	}
+	stopRPC()
+	if rpcErr := rpcCall("missing_method", map[string]any{}, nil); rpcErr == nil || rpcErr.Code != -32601 {
+		t.Fatalf("missing JSON-RPC method was accepted: %+v", rpcErr)
+	}
+	for _, path := range []string{"/", "/metrics"} {
+		response, err := http.Get("http://" + adminAddress + path)
+		if err != nil {
+			t.Fatal(err)
+		}
+		data, readErr := io.ReadAll(response.Body)
+		response.Body.Close()
+		if readErr != nil || response.StatusCode != http.StatusOK || len(data) == 0 {
+			t.Fatalf("%s unavailable: status=%d error=%v", path, response.StatusCode, readErr)
+		}
+		if path == "/metrics" && !bytes.Contains(data, []byte("lab01_mempool_transactions")) {
+			t.Fatal("metrics response lacks mempool metric")
+		}
 	}
 	request, err := http.NewRequest(http.MethodPost, "http://"+adminAddress+"/mempool", nil)
 	if err != nil {

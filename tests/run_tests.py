@@ -13,6 +13,10 @@ REPO = Path(__file__).resolve().parent.parent
 
 
 def main():
+    if len(sys.argv) == 1:
+        print("Run suite: python tests/run_tests.py --output local-runs/test-evidence")
+        print("Add --race for race detection. The suite can take several minutes.")
+        return
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--go", default="go", help="Go executable or full path")
     parser.add_argument("--race", action="store_true", help="Include Go race detection")

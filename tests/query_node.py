@@ -10,6 +10,10 @@ from urllib.request import urlopen
 
 
 def main():
+    if len(sys.argv) == 1:
+        print("Inspect node: python tests/query_node.py --config-dir config/demo --node 0 --view status")
+        print("--view supports status, mempool, or ledger. Use --help for more options.")
+        return
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--config-dir", type=Path, required=True)
     parser.add_argument("--node", type=int, required=True)

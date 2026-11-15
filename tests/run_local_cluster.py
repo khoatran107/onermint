@@ -2,59 +2,48 @@
 
 import argparse
 from collections import Counter
-from contextlib import ExitStack
-from datetime import datetime
 import json
 import os
 from pathlib import Path
+import signal
 import subprocess
 import sys
 import time
 
 
-# Edit these defaults or pass command-line options.
-DEFAULT_NODES = 10
-DEFAULT_BASE_PORT = 29000
-DEFAULT_RUN_MS = 10_000
-
-# Optional overrides for freshly generated configurations only.
-# For example, uncomment node 0 to delay only its outgoing messages by 500 ms.
-NODE_FAULT_OVERRIDES = {
-    # 0: {"MinDelayMS": 500, "MaxDelayMS": 500, "DisableAfterMS": 0},
-}
+DEFAULT_F = 3
 
 REPO = Path(__file__).resolve().parent.parent
+
+
+def handle_interrupt(_signum, _frame):
+    raise KeyboardInterrupt
 
 
 def build_node(go):
     output = REPO / "local-runs"
     output.mkdir(exist_ok=True)
     binary = output / ("node.exe" if os.name == "nt" else "node")
-    subprocess.run([go, "build", "-o", str(binary), "./src/cmd/node"],
+    subprocess.run([go, "build", "-buildvcs=false", "-o", str(binary), "./src/cmd/node"],
                    cwd=REPO, check=True)
     return binary
 
 
-def prepare_cluster(binary, args):
-    if args.nodes < 8 or (args.nodes - 1) % 3:
-        raise ValueError("Use n >= 8 and n = 3f + 1, for example ten nodes.")
-    directory = args.run_dir or REPO / "local-runs" / datetime.now().strftime("run-%Y%m%d-%H%M%S-%f")
-    directory = directory.resolve()
-    if directory.exists():
-        raise ValueError("Choose a fresh --run-dir; existing runs are never overwritten.")
+def prepare_cluster(go, name, fault_tolerance):
+    if fault_tolerance < 3:
+        raise ValueError("F must be at least 3 for this lab; N is always 3F + 1.")
+    if not name or Path(name).name != name:
+        raise ValueError("--init must be one simple scenario name, for example demo.")
+    directory = (REPO / "config" / name).resolve()
+    output = (REPO / "local-runs" / name).resolve()
+    if directory.exists() or output.exists():
+        raise ValueError("Config or output already exists; choose a fresh --init name.")
     directory.parent.mkdir(parents=True, exist_ok=True)
-    command = [str(binary), "-init-dir", str(directory), "-nodes", str(args.nodes),
-               "-base-port", str(args.base_port), "-run-ms", str(args.run_ms)]
-    if args.faults:
-        command.append("-faults")
+    relative_output = os.path.relpath(output, directory)
+    command = [go, "run", "-buildvcs=false", "./src/cmd/node",
+               "-init-dir", str(directory), "-f", str(fault_tolerance),
+               "-init-output-dir", relative_output]
     subprocess.run(command, cwd=REPO, check=True)
-    for node_id, changes in NODE_FAULT_OVERRIDES.items():
-        if node_id not in range(args.nodes):
-            raise ValueError(f"Unknown node in NODE_FAULT_OVERRIDES: {node_id}")
-        path = directory / f"node-{node_id:02d}.json"
-        config = json.loads(path.read_text(encoding="utf-8"))
-        config.setdefault("Faults", {"Seed": node_id + 1}).update(changes)
-        path.write_text(json.dumps(config, indent=2), encoding="utf-8")
     return directory
 
 
@@ -88,7 +77,7 @@ def load_configs(directory):
             raise ValueError("Missing GossipAddress; prepare fresh configurations for the new transport.")
         output = Path(config["OutputDir"])
         if not output.is_absolute():
-            output = path.parent / output
+            output = (path.parent / output).resolve()
         configs.append((path, config, output))
     if sum(c[1]["Behavior"] != "honest" for c in configs) > configs[0][1]["F"]:
         raise ValueError("Configured dishonest node count exceeds f; safety assumptions would not hold.")
@@ -125,17 +114,31 @@ def run_one_node(binary, path, expected_crash=False):
         stop_processes([process])
 
 
-def stop_processes(processes):
-    """Clean up only child processes launched by this script."""
+def wait_for_processes(processes, seconds):
+    """Wait for all children against one shared deadline."""
+    deadline = time.monotonic() + seconds
+    while any(process.poll() is None for process in processes):
+        if time.monotonic() >= deadline:
+            return False
+        time.sleep(0.05)
+    return True
+
+
+def stop_processes(processes, graceful_seconds=0):
+    """Stop only children launched by this script, concurrently and promptly."""
+    if graceful_seconds and wait_for_processes(processes, graceful_seconds):
+        return
     for process in processes:
         if process.poll() is None:
             process.terminate()
+    if not wait_for_processes(processes, 3):
+        for process in processes:
+            if process.poll() is None:
+                process.kill()
     for process in processes:
-        try:
-            process.wait(timeout=5)
-        except subprocess.TimeoutExpired:
+        if process.poll() is None:
             process.kill()
-            process.wait()
+        process.wait()
 
 
 def verify_results(configs, binary):
@@ -172,42 +175,57 @@ def verify_results(configs, binary):
     print("On-disk honest histories and roots agree. Go tests additionally verify execution and quorum signatures.")
 
 
-def run_cluster(binary, directory, configs):
+def run_cluster(binary, configs):
+    directory = configs[0][2].parent
+    if any(output.parent != directory for _, _, output in configs):
+        raise ValueError("All node OutputDir values must share one runtime directory.")
+    directory.mkdir(parents=True, exist_ok=True)
     processes = []
+    interrupted = False
     try:
-        with ExitStack() as files:
-            duration = max(c[1]["RunForMS"] for c in configs)
-            deadline = time.monotonic() + duration / 1000 + 20 if duration else None
-            for path, config, _ in configs:
-                node_id = config["NodeID"]
-                stdout = files.enter_context((directory / f"stdout-{node_id:02d}.txt").open("w"))
-                stderr = files.enter_context((directory / f"stderr-{node_id:02d}.txt").open("w"))
-                process = subprocess.Popen(
-                    [str(binary), "-config", str(path)], cwd=REPO,
-                    stdout=stdout, stderr=stderr,
-                    creationflags=subprocess.CREATE_NO_WINDOW if os.name == "nt" else 0,
-                )
-                processes.append(process)
-            for process, (_, config, _) in zip(processes, configs):
-                code = process.wait(timeout=max(0, deadline - time.monotonic()) if deadline else None)
+        duration = max(c[1]["RunForMS"] for c in configs)
+        deadline = time.monotonic() + duration / 1000 + 20 if duration else None
+        for path, _, _ in configs:
+            processes.append(subprocess.Popen([str(binary), "-config", str(path)], cwd=REPO))
+        pending = set(range(len(processes)))
+        while pending:
+            for index in tuple(pending):
+                process = processes[index]
+                code = process.poll()
+                if code is None:
+                    continue
+                pending.remove(index)
+                config = configs[index][1]
                 if code and not (config["Behavior"] == "crashed_proposer" and code == 86):
-                    raise RuntimeError(f"Node PID {process.pid} failed; inspect stderr in {directory}.")
-            verify_results(configs, binary)
+                    raise RuntimeError(f"Node PID {process.pid} exited with code {code}.")
+            if pending and deadline is not None and time.monotonic() >= deadline:
+                raise RuntimeError(f"Cluster exceeded its shutdown deadline; inspect events.jsonl in {directory}.")
+            if pending:
+                time.sleep(0.1)  # Keeps Ctrl+C responsive on Windows.
+        verify_results(configs, binary)
+    except KeyboardInterrupt:
+        interrupted = True
+        print("Stopping all validator processes...", file=sys.stderr, flush=True)
+        raise
     finally:
-        stop_processes(processes)
+        # Shared-console children receive Ctrl+C too. Give them time to close
+        # LevelDB and save result.json before forcing any survivor to stop.
+        stop_processes(processes, graceful_seconds=5 if interrupted else 0)
 
 
 def main():
+    if len(sys.argv) == 1:
+        print("Create config: python tests/run_local_cluster.py --init demo --f 3")
+        print("Run network:   python tests/run_local_cluster.py --config-dir config/demo")
+        print("More options:  python tests/run_local_cluster.py --help")
+        return
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--go", default="go", help="Go executable path")
-    parser.add_argument("--nodes", type=int, default=DEFAULT_NODES)
-    parser.add_argument("--base-port", type=int, default=DEFAULT_BASE_PORT)
-    parser.add_argument("--run-ms", type=int, default=DEFAULT_RUN_MS)
-    parser.add_argument("--faults", action="store_true", help="Generate example fault policies")
-    group = parser.add_mutually_exclusive_group()
-    group.add_argument("--run-dir", type=Path, help="Fresh directory to initialize")
+    parser.add_argument("--f", type=int, default=DEFAULT_F,
+                        help="init only: Byzantine tolerance; validator count N is 3F+1")
+    group = parser.add_mutually_exclusive_group(required=True)
+    group.add_argument("--init", help="Create config/<name>, then exit")
     group.add_argument("--config-dir", type=Path, help="Start existing, edited configs without regenerating")
-    parser.add_argument("--prepare-only", action="store_true", help="Generate configs, then stop for editing/manual launch")
     parser.add_argument("--submit", help="Submit this value to --node using its signing key")
     parser.add_argument("--nonce", type=int, default=1)
     parser.add_argument("--record", default="message")
@@ -217,18 +235,31 @@ def main():
     actions.add_argument("--node", type=int, help="Run only this node in the current terminal; requires --config-dir")
     actions.add_argument("--check-only", action="store_true", help="Check saved results without building or starting nodes; requires --config-dir")
     args = parser.parse_args()
+    if os.name == "nt" and hasattr(signal, "SIGBREAK"):
+        signal.signal(signal.SIGBREAK, handle_interrupt)
     if args.submit is not None and args.inspect:
         parser.error("Choose --submit or --inspect")
-    if (args.node is not None or args.check_only) and (not args.config_dir or args.prepare_only):
-        parser.error("--node/--check-only require --config-dir and cannot be combined with --prepare-only")
-    if args.config_dir:
-        directory = args.config_dir.resolve()
-        binary = REPO / "local-runs" / ("node.exe" if os.name == "nt" else "node")
-    else:
-        binary = build_node(args.go)
-        directory = prepare_cluster(binary, args)
+    init_forbidden = {"--submit", "--nonce", "--record", "--via", "--inspect", "--node", "--check-only"}
+    supplied_options = {argument.split("=", 1)[0] for argument in sys.argv[1:] if argument.startswith("--")}
+    if args.init and init_forbidden.intersection(supplied_options):
+        parser.error("--init only accepts --f (and optional --go)")
+    if args.config_dir and "--f" in supplied_options:
+        parser.error("--f is only valid with --init; running uses F from network.json")
+    if (args.node is not None or args.check_only) and not args.config_dir:
+        parser.error("--node/--check-only require --config-dir")
+    if args.init:
+        directory = prepare_cluster(args.go, args.init, args.f)
+        configs = load_configs(directory)
+        print(f"Created {len(configs)} validator configs in: {directory}")
+        print("Edit the JSON files, then run:")
+        print(f'python tests/run_local_cluster.py --config-dir "{directory}"')
+        return
+
+    directory = args.config_dir.resolve()
+    binary = REPO / "local-runs" / ("node.exe" if os.name == "nt" else "node")
     configs = load_configs(directory)
-    print(f"Cluster directory: {directory}", flush=True)
+    print(f"Config directory: {directory}", flush=True)
+    print(f"Runtime directory: {configs[0][2].parent}", flush=True)
     if args.check_only:
         verify_results(configs, binary)
     elif args.submit is not None or args.inspect:
@@ -253,16 +284,10 @@ def main():
         if not binary.exists():
             binary = build_node(args.go)
         run_one_node(binary, selected[0][0], selected[0][1]["Behavior"] == "crashed_proposer")
-    elif args.prepare_only:
-        require_fresh_output(configs)
-        print("Edit the JSON files, then run:")
-        print(f'python tests/run_local_cluster.py --go "{args.go}" --config-dir "{directory}"')
-        print(f"Or use --config-dir with --node 0 through --node {len(configs) - 1} in separate terminals.")
     else:
         require_fresh_output(configs)
-        if args.config_dir:
-            binary = build_node(args.go)
-        run_cluster(binary, directory, configs)
+        binary = build_node(args.go)
+        run_cluster(binary, configs)
 
 
 if __name__ == "__main__":

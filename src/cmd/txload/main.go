@@ -16,8 +16,6 @@ import (
 	crypt "blockchain-lab01/src/crypto"
 	"blockchain-lab01/src/realnet"
 	"blockchain-lab01/src/types"
-	"google.golang.org/grpc/codes"
-	"google.golang.org/grpc/status"
 )
 
 func main() {
@@ -54,11 +52,10 @@ func run(configPath, keyPath string, via int, count uint64, record string, value
 	if err != nil {
 		return err
 	}
-	client, err := realnet.NewTransactionClient(cfg.Peers[via].Address)
+	client, err := realnet.NewJSONRPCClient(cfg.AdminAddress, requestTimeout)
 	if err != nil {
 		return err
 	}
-	defer client.Close()
 
 	var gap time.Duration
 	if rate > 0 {
@@ -122,7 +119,7 @@ func loadValue(nonce uint64, size int) []byte {
 	return []byte(prefix + strings.Repeat("x", size-len(prefix)))
 }
 
-func submitWithRetry(client *realnet.TransactionClient, tx types.Transaction, retry, requestTimeout, maxRetry time.Duration) (types.Hash, error) {
+func submitWithRetry(client *realnet.JSONRPCClient, tx types.Transaction, retry, requestTimeout, maxRetry time.Duration) (types.Hash, error) {
 	deadline := time.Now().Add(maxRetry)
 	for {
 		ctx, cancel := context.WithTimeout(context.Background(), requestTimeout)
@@ -131,13 +128,14 @@ func submitWithRetry(client *realnet.TransactionClient, tx types.Transaction, re
 		if err == nil {
 			return id, nil
 		}
-		message := status.Convert(err).Message()
-		code := status.Code(err)
+		message := err.Error()
 		alreadyAccepted := strings.Contains(message, "duplicate transaction") || strings.Contains(message, "replayed transaction nonce")
 		if alreadyAccepted {
 			return crypt.TransactionID(tx)
 		}
-		temporary := strings.Contains(message, "nonce too far ahead") || strings.Contains(message, "mempool capacity exceeded") || code == codes.Unavailable || code == codes.DeadlineExceeded || code == codes.ResourceExhausted
+		var rpcErr *realnet.JSONRPCError
+		transportFailure := !errors.As(err, &rpcErr)
+		temporary := strings.Contains(message, "nonce too far ahead") || strings.Contains(message, "mempool capacity exceeded") || strings.Contains(message, "node stopping") || errors.Is(err, context.DeadlineExceeded) || transportFailure
 		if !temporary {
 			return types.Hash{}, err
 		}

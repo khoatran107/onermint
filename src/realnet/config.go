@@ -33,6 +33,7 @@ type Config struct {
 	AdminAddress                                                       string `json:",omitempty"`
 	Behavior                                                           string `json:",omitempty"`
 	Trace                                                              bool   `json:",omitempty"`
+	ConsoleLog                                                         bool   `json:",omitempty"`
 	MempoolLimit, MempoolBytes, MaxTxBytes, MaxBlockTXs, MaxBlockBytes int
 	StartAtUnixMS                                                      int64 // Optional common real-clock start for controlled experiments.
 }

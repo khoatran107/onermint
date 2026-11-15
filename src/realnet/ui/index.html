@@ -1,0 +1,48 @@
+<!doctype html>
+<html lang="vi">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Lab01 Transaction Client</title>
+  <style>
+    :root { color-scheme: light; font-family: system-ui, sans-serif; background:#f4f6f8; color:#17202a; }
+    body { max-width:760px; margin:40px auto; padding:0 18px; }
+    main { background:white; border:1px solid #d9e0e7; border-radius:14px; padding:24px; box-shadow:0 8px 24px #17202a12; }
+    h1 { margin-top:0; font-size:1.55rem; } .hint { color:#52606d; font-size:.92rem; }
+    label { display:block; margin-top:16px; font-weight:650; }
+    input, textarea, button { box-sizing:border-box; font:inherit; }
+    input, textarea { width:100%; margin-top:6px; padding:10px 12px; border:1px solid #b8c4ce; border-radius:8px; }
+    textarea { min-height:110px; resize:vertical; }
+    .owner { overflow-wrap:anywhere; background:#f2f5f7; padding:10px; border-radius:8px; font-family:ui-monospace,monospace; font-size:.8rem; }
+    .actions { display:flex; gap:10px; margin-top:20px; flex-wrap:wrap; }
+    button { border:0; border-radius:8px; padding:10px 16px; cursor:pointer; background:#1769e0; color:white; font-weight:650; }
+    button.secondary { background:#52606d; } button:disabled { opacity:.55; cursor:wait; }
+    pre { white-space:pre-wrap; overflow-wrap:anywhere; background:#101820; color:#d9f7e8; padding:14px; border-radius:8px; min-height:58px; }
+  </style>
+</head>
+<body>
+<main>
+  <h1>Lab01 Transaction Client</h1>
+  <p class="hint">Ví được tạo và lưu trong trình duyệt này. Private key không được gửi tới validator.</p>
+  <label>Honest node URL
+    <input id="nodeUrl" value="" placeholder="http://127.0.0.1:31000">
+  </label>
+  <label>Owner public key</label>
+  <div class="owner" id="owner">Đang tạo ví…</div>
+  <label>Key
+    <input id="record" value="message" maxlength="256">
+  </label>
+  <label>Value
+    <textarea id="value">hello blockchain</textarea>
+  </label>
+  <div class="actions">
+    <button id="send">Ký và gửi transaction</button>
+    <button id="status" class="secondary">Xem trạng thái node</button>
+    <button id="newWallet" class="secondary">Tạo ví mới</button>
+  </div>
+  <p class="hint">RPC trả transaction ID khi mempool nhận thành công; block finalization diễn ra bất đồng bộ.</p>
+  <pre id="output">Sẵn sàng.</pre>
+</main>
+<script src="/app.js"></script>
+</body>
+</html>

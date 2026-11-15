@@ -17,11 +17,12 @@ import (
 	"sync/atomic"
 	"time"
 
+	cons "blockchain-lab01/src/consensus"
 	crypt "blockchain-lab01/src/crypto"
 	"blockchain-lab01/src/ledger"
 	"blockchain-lab01/src/network"
-	"blockchain-lab01/src/node"
 	pb "blockchain-lab01/src/proto"
+	runtime "blockchain-lab01/src/runtime"
 	"blockchain-lab01/src/types"
 	"google.golang.org/grpc"
 )
@@ -32,13 +33,14 @@ type Result struct {
 	Height      uint64
 }
 type logWriter struct {
-	mu    sync.Mutex
-	file  *os.File
-	start time.Time
-	seq   uint64
-	err   error
-	trace bool
-	last  map[string]time.Time
+	mu      sync.Mutex
+	file    *os.File
+	start   time.Time
+	seq     uint64
+	err     error
+	trace   bool
+	console bool
+	last    map[string]time.Time
 }
 
 func (l *logWriter) record(e network.Event) {
@@ -89,7 +91,9 @@ func (l *logWriter) record(e network.Event) {
 			Root   string `json:",omitempty"`
 			Detail string `json:",omitempty"`
 		}{time.Now().Format("15:04:05.000"), e.Node, e.Event, e.Height, e.Round, ref, e.StateRoot, e.Reason})
-		fmt.Printf("%s node=%d %-22s height=%d round=%d %s %s\n", time.Now().Format("15:04:05"), e.Node, e.Event, e.Height, e.Round, e.Reason, e.StateRoot)
+		if l.console {
+			fmt.Printf("%s node=%d %-22s height=%d round=%d %s %s\n", time.Now().Format("15:04:05"), e.Node, e.Event, e.Height, e.Round, e.Reason, e.StateRoot)
+		}
 	}
 }
 func importantEvent(e string) bool {
@@ -129,14 +133,14 @@ type received struct {
 	frame *pb.Envelope
 	done  chan error
 	tx    *types.Transaction
-	query chan runtimeSnapshot
+	query *snapshotQuery
 }
 type arrival struct {
 	window uint64
 	count  int
 }
 
-// localNode is the owner-loop endpoint. Production uses node.Runtime; tests can
+// localNode is the owner-loop endpoint. Production uses runtime.Runtime; tests can
 // run an actual faulty peer implementation without modifying honest engines.
 type localNode interface {
 	Start() error
@@ -169,10 +173,20 @@ type process struct {
 	sessions                  map[int]*peerSession
 	streamWG                  sync.WaitGroup
 	store                     *ledger.Store
+	metricsMu                 sync.RWMutex
+	eventCounts               map[string]uint64
 }
 
-func (p *process) now() uint64            { return uint64(time.Since(p.log.start) / time.Millisecond) }
-func (p *process) Record(e network.Event) { p.log.record(e) }
+func (p *process) now() uint64 { return uint64(time.Since(p.log.start) / time.Millisecond) }
+func (p *process) Record(e network.Event) {
+	p.metricsMu.Lock()
+	if p.eventCounts == nil {
+		p.eventCounts = make(map[string]uint64)
+	}
+	p.eventCounts[e.Event]++
+	p.metricsMu.Unlock()
+	p.log.record(e)
+}
 func (p *process) Schedule(delay uint64, f func() error) error {
 	if delay > uint64((time.Duration(1<<63-1))/time.Millisecond) || f == nil {
 		return fmt.Errorf("real timer overflow")
@@ -423,7 +437,7 @@ func (p *process) save() error {
 func Run(parent context.Context, c Config) (resultErr error) {
 	return runWithNode(parent, c, func(p *process) (localNode, error) {
 		c = p.cfg
-		return node.New(node.Config{ID: c.NodeID, ChainID: c.ChainID, F: c.F, Validators: p.ids, PrivateKey: p.key, BaseTimeout: c.BaseTimeoutMS, RetryInterval: c.RetryMS, TargetHeights: c.TargetHeights, Store: p.store, Behavior: c.Behavior, MempoolLimit: c.MempoolLimit, MempoolBytes: c.MempoolBytes, MaxTxBytes: c.MaxTxBytes, MaxBlockTXs: c.MaxBlockTXs, MaxBlockBytes: c.MaxBlockBytes}, p)
+		return runtime.New(runtime.Config{ID: c.NodeID, ChainID: c.ChainID, F: c.F, Validators: p.ids, PrivateKey: p.key, BaseTimeout: c.BaseTimeoutMS, RetryInterval: c.RetryMS, TargetHeights: c.TargetHeights, Store: p.store, Behavior: c.Behavior, MempoolLimit: c.MempoolLimit, MempoolBytes: c.MempoolBytes, MaxTxBytes: c.MaxTxBytes, MaxBlockTXs: c.MaxBlockTXs, MaxBlockBytes: c.MaxBlockBytes}, p)
 	})
 }
 
@@ -484,7 +498,7 @@ func runWithNode(parent context.Context, c Config, makeNode func(*process) (loca
 	if store.Height() != 0 {
 		return fmt.Errorf("ledger exists on disk; validator signing-state recovery is not implemented; inspect it or use a fresh run directory")
 	}
-	p := &process{cfg: c, ctx: ctx, key: key, ids: ids, log: &logWriter{file: file, start: time.Now(), trace: c.Trace}, in: make(chan received, c.QueueLimit), jobs: make(chan *pb.Envelope, c.QueueLimit), faults: newFaultLayer(c.Faults), seen: make(map[transfer]bool), accepted: make(map[transfer]bool), requested: make(map[transfer]bool), blocked: make(map[int]uint64), arrivals: make(map[int]arrival), sessions: make(map[int]*peerSession), store: store}
+	p := &process{cfg: c, ctx: ctx, key: key, ids: ids, log: &logWriter{file: file, start: time.Now(), trace: c.Trace, console: c.ConsoleLog}, in: make(chan received, c.QueueLimit), jobs: make(chan *pb.Envelope, c.QueueLimit), faults: newFaultLayer(c.Faults), seen: make(map[transfer]bool), accepted: make(map[transfer]bool), requested: make(map[transfer]bool), blocked: make(map[int]uint64), arrivals: make(map[int]arrival), sessions: make(map[int]*peerSession), store: store, eventCounts: make(map[string]uint64)}
 	defer func() {
 		if resultErr != nil {
 			p.Record(network.Event{Node: c.NodeID, Peer: -1, Event: "node_stop", Reason: resultErr.Error()})
@@ -605,14 +619,22 @@ func runWithNode(parent context.Context, c Config, makeNode func(*process) (loca
 			timer.Stop()
 			if r.query != nil {
 				snapshot := runtimeSnapshot{}
-				reader, ok := p.runtime.(interface{ MempoolSnapshot() []types.Transaction })
+				reader, ok := p.runtime.(interface {
+					MempoolSnapshot() []types.Transaction
+					Status() cons.Status
+					AccountNonce(types.PublicKey) uint64
+				})
 				if !ok {
 					snapshot.err = fmt.Errorf("mempool inspection unavailable for this node runtime")
 				} else {
 					snapshot.transactions = reader.MempoolSnapshot()
+					snapshot.status = reader.Status()
+					if r.query.sender != nil {
+						snapshot.accountNonce = reader.AccountNonce(*r.query.sender)
+					}
 					snapshot.root, snapshot.err = p.runtime.StateRoot()
 				}
-				r.query <- snapshot
+				r.query.reply <- snapshot
 				continue
 			}
 			if r.tx != nil {

@@ -13,6 +13,10 @@ REPO = Path(__file__).resolve().parent.parent
 
 
 def main():
+    if len(sys.argv) == 1:
+        print("Check repeatability: python tests/verify_repeatability.py --output local-runs/repeatability")
+        print("This runs two real clusters and compares TX order and state root.")
+        return
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--go", default="go")
     parser.add_argument("--race", action="store_true")

@@ -1,5 +1,5 @@
 // Package node owns blockchain message handling independently of gRPC IO.
-package node
+package runtime
 
 import (
 	"blockchain-lab01/src/ledger"
@@ -101,6 +101,9 @@ func (n *Runtime) Start() error {
 }
 func (n *Runtime) StateRoot() (types.Hash, error) { return n.engine.State().Root(n.chain) }
 func (n *Runtime) Status() cons.Status            { return n.engine.Status() }
+func (n *Runtime) AccountNonce(sender types.PublicKey) uint64 {
+	return n.engine.State().LastNonce(sender)
+}
 func (n *Runtime) MempoolSnapshot() []types.Transaction {
 	return n.pool.Snapshot()
 }

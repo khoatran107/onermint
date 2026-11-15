@@ -1,0 +1,14 @@
+{
+  "uid": "lab01-network", "title": "Lab01 Blockchain Network", "description": "Validator metrics and logs", "schemaVersion": 41,
+  "refresh": "2s", "time": {"from": "now-15m", "to": "now"},
+  "templating": {"list": [{"name":"node","type":"query","datasource":{"type":"prometheus","uid":"prometheus"},"query":{"query":"label_values(lab01_ledger_height, node)"},"includeAll":true,"multi":true,"current":{"text":"All","value":"$__all"}}]},
+  "panels": [
+    {"id":1,"type":"timeseries","title":"Ledger height","datasource":{"type":"prometheus","uid":"prometheus"},"targets":[{"expr":"lab01_ledger_height{node=~\"$node\"}","legendFormat":"node {{node}}"}],"gridPos":{"x":0,"y":0,"w":12,"h":8}},
+    {"id":2,"type":"timeseries","title":"RAM mempool size","datasource":{"type":"prometheus","uid":"prometheus"},"targets":[{"expr":"lab01_mempool_transactions{node=~\"$node\"}","legendFormat":"node {{node}}"}],"gridPos":{"x":12,"y":0,"w":12,"h":8}},
+    {"id":3,"type":"timeseries","title":"Consensus round","datasource":{"type":"prometheus","uid":"prometheus"},"targets":[{"expr":"lab01_consensus_round{node=~\"$node\"}","legendFormat":"node {{node}}"}],"gridPos":{"x":0,"y":8,"w":8,"h":7}},
+    {"id":4,"type":"timeseries","title":"Consensus step (1 propose, 2 prevote, 3 precommit)","datasource":{"type":"prometheus","uid":"prometheus"},"targets":[{"expr":"lab01_consensus_step{node=~\"$node\"}","legendFormat":"node {{node}}"}],"gridPos":{"x":8,"y":8,"w":8,"h":7}},
+    {"id":5,"type":"timeseries","title":"Important event rate","datasource":{"type":"prometheus","uid":"prometheus"},"targets":[{"expr":"sum by (node,event) (rate(lab01_events_total{node=~\"$node\",event=~\"state_commit|consensus_timeout|transaction_reject|fault_.*|queue_full\"}[1m]))","legendFormat":"node {{node}} {{event}}"}],"gridPos":{"x":16,"y":8,"w":8,"h":7}},
+    {"id":6,"type":"logs","title":"Validator event logs","datasource":{"type":"loki","uid":"loki"},"targets":[{"expr":"{job=\"lab01\"} | json","refId":"A"}],"options":{"showTime":true,"wrapLogMessage":true,"enableLogDetails":true},"gridPos":{"x":0,"y":15,"w":24,"h":11}}
+  ]
+}
+

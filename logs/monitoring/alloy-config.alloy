@@ -1,0 +1,21 @@
+// Read validator JSON logs generated under local-runs.
+loki.source.file "lab01" {
+  targets = [
+    {
+      __path__ = "/var/log/lab01/**/events.jsonl",
+      job      = "lab01",
+    },
+  ]
+  forward_to = [loki.write.local.receiver]
+  file_match {
+    enabled     = true
+    sync_period = "2s"
+  }
+}
+
+loki.write "local" {
+  endpoint {
+    url = "http://loki:3100/loki/api/v1/push"
+  }
+}
+

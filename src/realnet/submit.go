@@ -1,10 +1,14 @@
 package realnet
 
 import (
+	"bytes"
 	"context"
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
+	"net/http"
+	"strings"
+	"time"
 
 	crypt "blockchain-lab01/src/crypto"
 	pb "blockchain-lab01/src/proto"
@@ -23,28 +27,101 @@ func (p *process) Submit(ctx context.Context, request *pb.SubmitRequest) (*pb.Su
 	if err := json.Unmarshal(request.Transaction, &tx); err != nil {
 		return nil, status.Error(codes.InvalidArgument, err.Error())
 	}
+	id, err := p.submitTransaction(ctx, tx)
+	if err != nil {
+		return nil, status.Error(codes.InvalidArgument, err.Error())
+	}
+	return &pb.SubmitReply{TransactionId: id[:]}, nil
+}
+
+// JSONRPCClient is the public client interface used by the browser and load
+// generator. Validator-to-validator traffic does not use this client.
+type JSONRPCClient struct {
+	url    string
+	client *http.Client
+	nextID uint64
+}
+
+type JSONRPCError struct {
+	Code    int
+	Message string
+}
+
+func (e *JSONRPCError) Error() string { return fmt.Sprintf("JSON-RPC %d: %s", e.Code, e.Message) }
+
+func NewJSONRPCClient(baseURL string, timeout time.Duration) (*JSONRPCClient, error) {
+	if timeout <= 0 {
+		return nil, fmt.Errorf("positive JSON-RPC timeout required")
+	}
+	baseURL = strings.TrimRight(baseURL, "/")
+	if !strings.HasPrefix(baseURL, "http://") && !strings.HasPrefix(baseURL, "https://") {
+		baseURL = "http://" + baseURL
+	}
+	return &JSONRPCClient{url: baseURL + "/rpc", client: &http.Client{Timeout: timeout}}, nil
+}
+
+func (c *JSONRPCClient) Submit(ctx context.Context, tx types.Transaction) (types.Hash, error) {
+	c.nextID++
+	requestBody, err := json.Marshal(map[string]any{
+		"jsonrpc": "2.0", "id": c.nextID, "method": "lab_sendRawTransaction",
+		"params": map[string]any{"transaction": tx},
+	})
+	if err != nil {
+		return types.Hash{}, err
+	}
+	request, err := http.NewRequestWithContext(ctx, http.MethodPost, c.url, bytes.NewReader(requestBody))
+	if err != nil {
+		return types.Hash{}, err
+	}
+	request.Header.Set("Content-Type", "application/json")
+	response, err := c.client.Do(request)
+	if err != nil {
+		return types.Hash{}, err
+	}
+	defer response.Body.Close()
+	var body struct {
+		Result string    `json:"result"`
+		Error  *rpcError `json:"error"`
+	}
+	if err := json.NewDecoder(response.Body).Decode(&body); err != nil {
+		return types.Hash{}, err
+	}
+	if body.Error != nil {
+		return types.Hash{}, &JSONRPCError{Code: body.Error.Code, Message: body.Error.Message}
+	}
+	raw, err := hex.DecodeString(strings.TrimPrefix(body.Result, "0x"))
+	if err != nil || len(raw) != 32 {
+		return types.Hash{}, fmt.Errorf("invalid JSON-RPC transaction receipt")
+	}
+	return types.Hash(raw), nil
+}
+
+// submitTransaction is the one ingress path shared by gRPC and JSON-RPC.
+// Successful return means admission to this node's RAM mempool, not finality.
+func (p *process) submitTransaction(ctx context.Context, tx types.Transaction) (types.Hash, error) {
+	var zero types.Hash
 	r := received{tx: &tx, done: make(chan error, 1)}
 	select {
 	case p.in <- r:
 	case <-ctx.Done():
-		return nil, status.FromContextError(ctx.Err()).Err()
+		return zero, ctx.Err()
 	case <-p.ctx.Done():
-		return nil, status.Error(codes.Unavailable, "node stopping")
+		return zero, fmt.Errorf("node stopping")
 	}
 	select {
 	case err := <-r.done:
 		if err != nil {
-			return nil, status.Error(codes.InvalidArgument, err.Error())
+			return zero, err
 		}
 		id, err := crypt.TransactionID(tx)
 		if err != nil {
-			return nil, status.Error(codes.Internal, err.Error())
+			return zero, err
 		}
-		return &pb.SubmitReply{TransactionId: id[:]}, nil
+		return id, nil
 	case <-ctx.Done():
-		return nil, status.FromContextError(ctx.Err()).Err()
+		return zero, ctx.Err()
 	case <-p.ctx.Done():
-		return nil, status.Error(codes.Unavailable, "node stopping")
+		return zero, fmt.Errorf("node stopping")
 	}
 }
 
