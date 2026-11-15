@@ -1,0 +1,9 @@
+{
+  "NodeID": 2,
+  "NetworkFile": "network.json",
+  "OutputDir": "../../local-runs/t7-equivocation/node-02",
+  "Behavior": "equivocate",
+  "AdminAddress": "127.0.0.1:31002",
+  "SendGapMS": 1,
+  "Trace": true
+}

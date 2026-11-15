@@ -1,0 +1,21 @@
+{
+  "NodeID": 8,
+  "NetworkFile": "network.json",
+  "OutputDir": "../../local-runs/t8-same-seed/node-08",
+  "Behavior": "honest",
+  "AdminAddress": "127.0.0.1:31008",
+  "SendGapMS": 1,
+  "Trace": true,
+  "Faults": {
+    "Seed": 50,
+    "MinDelayMS": 2,
+    "MaxDelayMS": 20,
+    "DropBPS": 1000,
+    "DuplicateBPS": 1500,
+    "ReorderEvery": 7,
+    "ReorderHoldMS": 40,
+    "ReplayEvery": 5,
+    "ReplayAgeMS": 50,
+    "DisableAfterMS": 8000
+  }
+}

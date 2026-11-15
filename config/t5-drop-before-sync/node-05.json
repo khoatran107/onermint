@@ -1,0 +1,14 @@
+{
+  "NodeID": 5,
+  "NetworkFile": "network.json",
+  "OutputDir": "../../local-runs/t5-drop-before-sync/node-05",
+  "Behavior": "honest",
+  "AdminAddress": "127.0.0.1:31005",
+  "SendGapMS": 1,
+  "Trace": true,
+  "Faults": {
+    "Seed": 10,
+    "DropBPS": 10000,
+    "DisableAfterMS": 8000
+  }
+}

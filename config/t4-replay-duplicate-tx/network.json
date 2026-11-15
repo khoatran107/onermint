@@ -1,0 +1,61 @@
+{
+  "ChainID": "lab01-local",
+  "F": 3,
+  "Peers": [
+    {
+      "Address": "127.0.0.1:29000",
+      "PublicKey": "14ae7bcf6d69d3eb9b0c2d7e54b2f3c42e37f9cacbe9769e5d6231f9cb4b71c4",
+      "GossipAddress": "127.0.0.1:30000"
+    },
+    {
+      "Address": "127.0.0.1:29001",
+      "PublicKey": "bcea826e31847e34dcd8c802218f266d7805783585f477efd815c9d70d89f43c",
+      "GossipAddress": "127.0.0.1:30001"
+    },
+    {
+      "Address": "127.0.0.1:29002",
+      "PublicKey": "23f1f0b7d0cab4cbef1b10da48d2ebcb9654420b17bdecd1a98a0750a5fec82a",
+      "GossipAddress": "127.0.0.1:30002"
+    },
+    {
+      "Address": "127.0.0.1:29003",
+      "PublicKey": "dc71651334f928827e57333f845ceb49d185e3b44c270d7c2b2e72d069ab1c9e",
+      "GossipAddress": "127.0.0.1:30003"
+    },
+    {
+      "Address": "127.0.0.1:29004",
+      "PublicKey": "e650a38a5bb3d1f660418c5198e8124c08cbbea44f30ac71476e63add37652c3",
+      "GossipAddress": "127.0.0.1:30004"
+    },
+    {
+      "Address": "127.0.0.1:29005",
+      "PublicKey": "afe4f62d3129a26fe1ccb42c5dc75f206e392e5574ff107570caa892f72530ec",
+      "GossipAddress": "127.0.0.1:30005"
+    },
+    {
+      "Address": "127.0.0.1:29006",
+      "PublicKey": "82a33a7bfbf3ce51d8f1ee9cd78d54415d0d683c5c9f292f8a121023db6891d2",
+      "GossipAddress": "127.0.0.1:30006"
+    },
+    {
+      "Address": "127.0.0.1:29007",
+      "PublicKey": "dc9fddc81252ddc821f03ef9ebf77323847205085dae50f8856d09813a59cdcd",
+      "GossipAddress": "127.0.0.1:30007"
+    },
+    {
+      "Address": "127.0.0.1:29008",
+      "PublicKey": "4208d37057162cbaf6df91bc4e3e47f0bcffc809e5f4bc07e09612b8c982bfa7",
+      "GossipAddress": "127.0.0.1:30008"
+    },
+    {
+      "Address": "127.0.0.1:29009",
+      "PublicKey": "1f0c43845a627c753997503e229ad8ff6a21e538825a9d851f7af89149def5cb",
+      "GossipAddress": "127.0.0.1:30009"
+    }
+  ],
+  "MinBlockTXs": 3,
+  "BlockMaxWaitMS": 2000,
+  "BaseTimeoutMS": 1000,
+  "MaxBlockTXs": 128,
+  "MaxBlockBytes": 4177920
+}

@@ -1,0 +1,9 @@
+{
+  "NodeID": 3,
+  "NetworkFile": "network.json",
+  "OutputDir": "../../local-runs/t3b-wrong-domain/node-03",
+  "Behavior": "honest",
+  "AdminAddress": "127.0.0.1:31003",
+  "SendGapMS": 1,
+  "Trace": true
+}

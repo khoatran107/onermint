@@ -1,0 +1,9 @@
+{
+  "NodeID": 1,
+  "NetworkFile": "network.json",
+  "OutputDir": "../../local-runs/t4-replay-duplicate-tx/node-01",
+  "Behavior": "duplicate_transaction",
+  "AdminAddress": "127.0.0.1:31001",
+  "SendGapMS": 1,
+  "Trace": true
+}

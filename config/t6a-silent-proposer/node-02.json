@@ -1,0 +1,9 @@
+{
+  "NodeID": 2,
+  "NetworkFile": "network.json",
+  "OutputDir": "../../local-runs/t6a-silent-proposer/node-02",
+  "Behavior": "honest",
+  "AdminAddress": "127.0.0.1:31002",
+  "SendGapMS": 1,
+  "Trace": true
+}

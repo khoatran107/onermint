@@ -1,0 +1,9 @@
+{
+  "NodeID": 5,
+  "NetworkFile": "network.json",
+  "OutputDir": "../../local-runs/t1-normal/node-05",
+  "Behavior": "honest",
+  "AdminAddress": "127.0.0.1:31005",
+  "SendGapMS": 1,
+  "Trace": true
+}

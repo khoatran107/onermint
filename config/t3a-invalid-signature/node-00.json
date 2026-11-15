@@ -1,0 +1,9 @@
+{
+  "NodeID": 0,
+  "NetworkFile": "network.json",
+  "OutputDir": "../../local-runs/t3a-invalid-signature/node-00",
+  "Behavior": "invalid_signature",
+  "AdminAddress": "127.0.0.1:31000",
+  "SendGapMS": 1,
+  "Trace": true
+}

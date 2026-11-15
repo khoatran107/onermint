@@ -1,0 +1,17 @@
+{
+  "NodeID": 8,
+  "NetworkFile": "network.json",
+  "OutputDir": "../../local-runs/t2-duplicate-reorder/node-08",
+  "Behavior": "honest",
+  "AdminAddress": "127.0.0.1:31008",
+  "SendGapMS": 1,
+  "Trace": true,
+  "Faults": {
+    "Seed": 15,
+    "MinDelayMS": 2,
+    "MaxDelayMS": 8,
+    "DuplicateBPS": 10000,
+    "ReorderEvery": 4,
+    "ReorderHoldMS": 40
+  }
+}
