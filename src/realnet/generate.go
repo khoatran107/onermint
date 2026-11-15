@@ -45,10 +45,12 @@ func Generate(dir, outputRoot string, faultTolerance, basePort int, runMS uint64
 		peers = append(peers, Peer{Address: fmt.Sprintf("127.0.0.1:%d", basePort+i), PublicKey: hex.EncodeToString(pub[:]), GossipAddress: fmt.Sprintf("127.0.0.1:%d", basePort+gossipPortShift+i)})
 	}
 	shared := struct {
-		ChainID string
-		F       int
-		Peers   []Peer
-	}{"lab01-local", faultTolerance, peers}
+		ChainID        string
+		F              int
+		Peers          []Peer
+		MinBlockTXs    int
+		BlockMaxWaitMS uint64
+	}{"lab01-local", faultTolerance, peers, 3, 2000}
 	b, err := json.MarshalIndent(shared, "", "  ")
 	if err != nil {
 		return err

@@ -100,7 +100,7 @@ func importantEvent(e string) bool {
 	switch e {
 	case "node_stop":
 		return true
-	case "listen", "membership", "mempool_accept", "transaction_reject", "transaction_replay", "consensus_proposal", "consensus_timeout", "consensus_lock", "consensus_vote_signed", "state_commit", "proposer_crash", "block", "unblock", "reject_handshake", "ledger_error", "fault_drop", "fault_duplicate", "fault_reorder", "fault_replay", "queue_full", "behavior", "behavior_message":
+	case "listen", "membership", "mempool_accept", "transaction_reject", "transaction_replay", "block_wait_elapsed", "consensus_proposal", "consensus_timeout", "consensus_lock", "consensus_vote_signed", "state_commit", "proposer_crash", "block", "unblock", "reject_handshake", "ledger_error", "fault_drop", "fault_duplicate", "fault_reorder", "fault_replay", "queue_full", "behavior", "behavior_message":
 		return true
 	}
 	return false
@@ -437,7 +437,7 @@ func (p *process) save() error {
 func Run(parent context.Context, c Config) (resultErr error) {
 	return runWithNode(parent, c, func(p *process) (localNode, error) {
 		c = p.cfg
-		return runtime.New(runtime.Config{ID: c.NodeID, ChainID: c.ChainID, F: c.F, Validators: p.ids, PrivateKey: p.key, BaseTimeout: c.BaseTimeoutMS, RetryInterval: c.RetryMS, TargetHeights: c.TargetHeights, Store: p.store, Behavior: c.Behavior, MempoolLimit: c.MempoolLimit, MempoolBytes: c.MempoolBytes, MaxTxBytes: c.MaxTxBytes, MaxBlockTXs: c.MaxBlockTXs, MaxBlockBytes: c.MaxBlockBytes}, p)
+		return runtime.New(runtime.Config{ID: c.NodeID, ChainID: c.ChainID, F: c.F, Validators: p.ids, PrivateKey: p.key, BaseTimeout: c.BaseTimeoutMS, RetryInterval: c.RetryMS, TargetHeights: c.TargetHeights, Store: p.store, Behavior: c.Behavior, MempoolLimit: c.MempoolLimit, MempoolBytes: c.MempoolBytes, MaxTxBytes: c.MaxTxBytes, MinBlockTXs: c.MinBlockTXs, BlockMaxWait: c.BlockMaxWaitMS, MaxBlockTXs: c.MaxBlockTXs, MaxBlockBytes: c.MaxBlockBytes}, p)
 	})
 }
 

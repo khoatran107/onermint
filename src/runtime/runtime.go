@@ -25,15 +25,15 @@ type Port interface {
 	Record(network.Event)
 }
 type Config struct {
-	ID                                                                 int
-	ChainID                                                            string
-	F                                                                  int
-	Validators                                                         []types.ValidatorID
-	PrivateKey                                                         ed25519.PrivateKey
-	BaseTimeout, RetryInterval, TargetHeights                          uint64
-	Store                                                              *ledger.Store
-	Behavior                                                           string
-	MempoolLimit, MempoolBytes, MaxTxBytes, MaxBlockTXs, MaxBlockBytes int
+	ID                                                                              int
+	ChainID                                                                         string
+	F                                                                               int
+	Validators                                                                      []types.ValidatorID
+	PrivateKey                                                                      ed25519.PrivateKey
+	BaseTimeout, RetryInterval, TargetHeights, BlockMaxWait                         uint64
+	Store                                                                           *ledger.Store
+	Behavior                                                                        string
+	MempoolLimit, MempoolBytes, MaxTxBytes, MinBlockTXs, MaxBlockTXs, MaxBlockBytes int
 }
 type wireHeader struct {
 	Proposal *cons.Proposal  `json:",omitempty"`
@@ -71,6 +71,10 @@ type Runtime struct {
 	behavior                   string
 	key                        ed25519.PrivateKey
 	maxBlockTXs, maxBlockBytes int
+	minBlockTXs                int
+	blockMaxWait               uint64
+	batchEpoch                 uint64
+	batchScheduled, batchReady bool
 	replay                     *types.Transaction
 	attempted                  map[slot]bool
 	ads                        []advertised
@@ -90,7 +94,13 @@ func New(c Config, port Port) (*Runtime, error) {
 	if types.ValidatorID(c.PrivateKey[32:]) != c.Validators[c.ID] {
 		return nil, fmt.Errorf("node ID does not match private key")
 	}
-	n := &Runtime{port: port, id: c.ID, identity: c.Validators[c.ID], engine: e, chain: c.ChainID, target: c.TargetHeights, retry: c.RetryInterval, attempted: make(map[slot]bool), remote: make(map[remoteKey]wireHeader), store: c.Store, pool: mempool.New(c.MempoolLimit, c.MempoolBytes, c.MaxTxBytes), localTX: make(map[types.Hash]types.Transaction), behavior: c.Behavior, key: append(ed25519.PrivateKey(nil), c.PrivateKey...), maxBlockTXs: c.MaxBlockTXs, maxBlockBytes: c.MaxBlockBytes}
+	if c.MinBlockTXs == 0 {
+		c.MinBlockTXs = 1 // Direct unit/runtime users retain the old immediate behavior.
+	}
+	if c.BlockMaxWait == 0 {
+		c.BlockMaxWait = c.BaseTimeout
+	}
+	n := &Runtime{port: port, id: c.ID, identity: c.Validators[c.ID], engine: e, chain: c.ChainID, target: c.TargetHeights, retry: c.RetryInterval, attempted: make(map[slot]bool), remote: make(map[remoteKey]wireHeader), store: c.Store, pool: mempool.New(c.MempoolLimit, c.MempoolBytes, c.MaxTxBytes), localTX: make(map[types.Hash]types.Transaction), behavior: c.Behavior, key: append(ed25519.PrivateKey(nil), c.PrivateKey...), minBlockTXs: c.MinBlockTXs, blockMaxWait: c.BlockMaxWait, maxBlockTXs: c.MaxBlockTXs, maxBlockBytes: c.MaxBlockBytes}
 	return n, nil
 }
 func (n *Runtime) Start() error {
@@ -148,8 +158,8 @@ func (n *Runtime) process() error {
 			n.port.Record(network.Event{Node: n.id, Peer: -1, Event: "proposer_crash", Height: s.Height, Round: s.Round})
 			return ErrCrash
 		}
-		txs := n.pool.Select(n.engine.State(), n.maxBlockTXs, n.maxBlockBytes)
-		if n.behavior != "silent_proposer" && len(txs) > 0 {
+		txs := n.selectBatch()
+		if n.behavior != "silent_proposer" && n.batchEligible(txs) {
 			n.attempted[slot{s.Height, s.Round}] = true
 			if _, err := n.engine.MakeProposal(txs); err != nil {
 				if errors.Is(err, cons.ErrPersistence) {
@@ -218,6 +228,10 @@ func (n *Runtime) process() error {
 	for _, f := range o.Finalized {
 		f := f
 		n.pool.Prune(n.engine.State())
+		n.resetBatchWait()
+		if err := n.armBatchWait(); err != nil {
+			return err
+		}
 		for id := range n.localTX {
 			if !n.pool.Contains(id) {
 				delete(n.localTX, id)
@@ -264,9 +278,9 @@ func (n *Runtime) scheduleTimer(timer cons.Timer) error {
 		if s.Height > n.target {
 			return nil
 		}
-		// Idle nodes wait for a transaction instead of increasing rounds forever
-		// before a student submits their first transaction from another terminal.
-		if s.Height == timer.Height && s.Round == timer.Round && s.Step == cons.Propose && !s.Locked && n.pool.Len() == 0 {
+		// Batch waiting is not a proposer failure. Do not change round until the
+		// configured transaction threshold or maximum wait has been reached.
+		if s.Height == timer.Height && s.Round == timer.Round && s.Step == cons.Propose && !s.Locked && !n.batchEligible(n.selectBatch()) {
 			return n.scheduleTimer(timer)
 		}
 		if err := n.engine.Timeout(timer); err != nil {
@@ -471,7 +485,45 @@ func (n *Runtime) admit(tx types.Transaction) error {
 		n.replay = &copyTX
 	}
 	n.port.Record(network.Event{Node: n.id, Peer: -1, Event: "mempool_accept", Ref: id, Reason: fmt.Sprintf("pending=%d nonce=%d", n.pool.Len(), tx.Nonce)})
+	return n.armBatchWait()
+}
+
+func (n *Runtime) armBatchWait() error {
+	if n.pool.Len() == 0 || n.batchScheduled || n.batchReady {
+		return nil
+	}
+	n.batchScheduled = true
+	epoch := n.batchEpoch
+	if err := n.port.Schedule(n.blockMaxWait, func() error {
+		if epoch != n.batchEpoch {
+			return nil
+		}
+		n.batchScheduled = false
+		if n.pool.Len() == 0 {
+			return nil
+		}
+		n.batchReady = true
+		n.port.Record(network.Event{Node: n.id, Peer: -1, Event: "block_wait_elapsed", Reason: fmt.Sprintf("pending=%d", n.pool.Len())})
+		return n.process()
+	}); err != nil {
+		n.batchScheduled = false
+		return err
+	}
 	return nil
+}
+
+func (n *Runtime) selectBatch() []types.Transaction {
+	return n.pool.Select(n.engine.State(), n.maxBlockTXs, n.maxBlockBytes)
+}
+
+func (n *Runtime) batchEligible(txs []types.Transaction) bool {
+	return len(txs) > 0 && (len(txs) >= n.minBlockTXs || n.batchReady)
+}
+
+func (n *Runtime) resetBatchWait() {
+	n.batchEpoch++
+	n.batchScheduled = false
+	n.batchReady = false
 }
 func (n *Runtime) Submit(tx types.Transaction) error {
 	if err := n.admit(tx); err != nil {

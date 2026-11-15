@@ -110,6 +110,13 @@ Thông số thường sửa:
 | `Trace` | `false` | Log network chi tiết |
 | `ConsoleLog` | `false` | In event log ra terminal |
 
+Hai tham số chung trong `network.json` điều khiển lúc proposer tạo block:
+
+| Field | Default | Ý nghĩa |
+|---|---:|---|
+| `MinBlockTXs` | `3` | Tạo block ngay khi đủ transaction thực thi được |
+| `BlockMaxWaitMS` | `2000` | Nếu chưa đủ, tạo block sau thời gian chờ tối đa |
+
 Behavior hỗ trợ: `invalid_signature`, `wrong_domain`, `duplicate_transaction`,
 `replay_transaction`, `silent_proposer`, `crashed_proposer`.
 

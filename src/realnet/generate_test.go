@@ -22,6 +22,9 @@ func TestGeneratedPortRangesDoNotDependOnNodeCount(t *testing.T) {
 				if err != nil {
 					t.Fatal(err)
 				}
+				if cfg.MinBlockTXs != 3 || cfg.BlockMaxWaitMS != 2000 {
+					t.Fatalf("batch defaults = %d/%d, want 3/2000", cfg.MinBlockTXs, cfg.BlockMaxWaitMS)
+				}
 				for address, want := range map[string]int{
 					cfg.Peers[i].Address:       29000 + i,
 					cfg.Peers[i].GossipAddress: 30000 + i,

@@ -160,7 +160,9 @@ func runStage5Case(t *testing.T, spec caseSpec) caseEvidence {
 		}
 		policy := spec.policy
 		policy.Seed += int64(i)
-		cfg := Config{ChainID: "stage5", NodeID: i, F: 3, Peers: peers, PrivateKeyFile: keyPath, OutputDir: filepath.Join(dir, fmt.Sprintf("node-%02d", i)), BaseTimeoutMS: spec.timeout, RetryMS: 300, RunForMS: 12000, TargetHeights: uint64(spec.target), SendGapMS: 1, QueueLimit: 2048, ReceiveLimit: 3000, ReceiveWindowMS: 1000, BlockMS: 200, Faults: policy, StartAtUnixMS: startAt, Trace: true, Behavior: spec.behaviors[i]}
+		// Stage scenarios submit one transaction per height. A short explicit
+		// batch wait exercises the delta path while network faults are active.
+		cfg := Config{ChainID: "stage5", NodeID: i, F: 3, Peers: peers, PrivateKeyFile: keyPath, OutputDir: filepath.Join(dir, fmt.Sprintf("node-%02d", i)), BaseTimeoutMS: spec.timeout, RetryMS: 300, RunForMS: 12000, TargetHeights: uint64(spec.target), MinBlockTXs: 3, BlockMaxWaitMS: 200, SendGapMS: 1, QueueLimit: 2048, ReceiveLimit: 3000, ReceiveWindowMS: 1000, BlockMS: 200, Faults: policy, StartAtUnixMS: startAt, Trace: true, Behavior: spec.behaviors[i]}
 		cfg.Defaults()
 		data, err := json.MarshalIndent(cfg, "", "  ")
 		if err != nil {

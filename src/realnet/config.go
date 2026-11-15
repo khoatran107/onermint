@@ -19,23 +19,23 @@ type Peer struct {
 	GossipAddress string
 }
 type Config struct {
-	ChainID                                                            string
-	NodeID, F                                                          int
-	Peers                                                              []Peer
-	PrivateKeyFile, OutputDir                                          string
-	BaseTimeoutMS, RetryMS, RunForMS                                   uint64
-	TargetHeights                                                      uint64
-	SendGapMS                                                          uint64
-	QueueLimit, ReceiveLimit                                           int
-	ReceiveWindowMS, BlockMS                                           uint64
-	Faults                                                             Policy
-	NetworkFile                                                        string `json:",omitempty"`
-	AdminAddress                                                       string `json:",omitempty"`
-	Behavior                                                           string `json:",omitempty"`
-	Trace                                                              bool   `json:",omitempty"`
-	ConsoleLog                                                         bool   `json:",omitempty"`
-	MempoolLimit, MempoolBytes, MaxTxBytes, MaxBlockTXs, MaxBlockBytes int
-	StartAtUnixMS                                                      int64 // Optional common real-clock start for controlled experiments.
+	ChainID                                                                         string
+	NodeID, F                                                                       int
+	Peers                                                                           []Peer
+	PrivateKeyFile, OutputDir                                                       string
+	BaseTimeoutMS, RetryMS, RunForMS, BlockMaxWaitMS                                uint64
+	TargetHeights                                                                   uint64
+	SendGapMS                                                                       uint64
+	QueueLimit, ReceiveLimit                                                        int
+	ReceiveWindowMS, BlockMS                                                        uint64
+	Faults                                                                          Policy
+	NetworkFile                                                                     string `json:",omitempty"`
+	AdminAddress                                                                    string `json:",omitempty"`
+	Behavior                                                                        string `json:",omitempty"`
+	Trace                                                                           bool   `json:",omitempty"`
+	ConsoleLog                                                                      bool   `json:",omitempty"`
+	MempoolLimit, MempoolBytes, MaxTxBytes, MinBlockTXs, MaxBlockTXs, MaxBlockBytes int
+	StartAtUnixMS                                                                   int64 // Optional common real-clock start for controlled experiments.
 }
 
 func LoadConfig(path string) (Config, error) {
@@ -58,14 +58,17 @@ func LoadConfig(path string) (Config, error) {
 			return c, err
 		}
 		var shared struct {
-			ChainID string
-			F       int
-			Peers   []Peer
+			ChainID        string
+			F              int
+			Peers          []Peer
+			MinBlockTXs    int
+			BlockMaxWaitMS uint64
 		}
 		if err = json.Unmarshal(raw, &shared); err != nil {
 			return c, err
 		}
 		c.ChainID, c.F, c.Peers = shared.ChainID, shared.F, shared.Peers
+		c.MinBlockTXs, c.BlockMaxWaitMS = shared.MinBlockTXs, shared.BlockMaxWaitMS
 	}
 	c.Defaults()
 	if !filepath.IsAbs(c.PrivateKeyFile) {
@@ -125,6 +128,12 @@ func (c *Config) Defaults() {
 	if c.MaxBlockTXs == 0 {
 		c.MaxBlockTXs = 128
 	}
+	if c.MinBlockTXs == 0 {
+		c.MinBlockTXs = 3
+	}
+	if c.BlockMaxWaitMS == 0 {
+		c.BlockMaxWaitMS = 2000
+	}
 	if c.MaxBlockBytes == 0 {
 		c.MaxBlockBytes = (4 << 20) - (16 << 10)
 	}
@@ -144,10 +153,10 @@ func (c Config) Validate() error {
 	if c.ChainID == "" || c.PrivateKeyFile == "" || c.OutputDir == "" || c.TargetHeights == 0 || c.BaseTimeoutMS == 0 || c.RetryMS == 0 || c.SendGapMS == 0 || c.QueueLimit < 1 || c.ReceiveLimit < 1 || c.ReceiveWindowMS == 0 || c.BlockMS == 0 {
 		return fmt.Errorf("missing node settings")
 	}
-	if c.MaxTxBytes < 1 || c.MaxTxBytes > 1<<20 || c.MempoolLimit < 1 || c.MempoolBytes < c.MaxTxBytes || c.MaxBlockTXs < 1 || c.MaxBlockBytes < c.MaxTxBytes || c.MaxBlockBytes > (4<<20)-(16<<10) {
+	if c.MaxTxBytes < 1 || c.MaxTxBytes > 1<<20 || c.MempoolLimit < 1 || c.MempoolBytes < c.MaxTxBytes || c.MinBlockTXs < 1 || c.MinBlockTXs > c.MaxBlockTXs || c.MaxBlockTXs < 1 || c.MaxBlockBytes < c.MaxTxBytes || c.MaxBlockBytes > (4<<20)-(16<<10) {
 		return fmt.Errorf("invalid mempool/block capacity")
 	}
-	for _, ms := range []uint64{c.BaseTimeoutMS, c.RetryMS, c.RunForMS, c.SendGapMS, c.ReceiveWindowMS, c.BlockMS} {
+	for _, ms := range []uint64{c.BaseTimeoutMS, c.RetryMS, c.RunForMS, c.BlockMaxWaitMS, c.SendGapMS, c.ReceiveWindowMS, c.BlockMS} {
 		if ms > uint64((24*time.Hour)/time.Millisecond) {
 			return fmt.Errorf("duration exceeds one-day lab limit")
 		}
