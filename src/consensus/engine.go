@@ -555,6 +555,40 @@ func (e *Engine) finalize(c candidate, round uint64, hash types.Hash, proof []ty
 	return nil
 }
 
+// Restore rebuilds a fresh engine from the first upto persisted decisions
+// (full sync from local disk). Every header, quorum proof, transaction
+// signature and state root is re-verified exactly as ReceiveFinalized does,
+// but Persist is not called because the blocks are already on disk. Voting
+// state of the interrupted height is not recoverable; see the README.
+func (e *Engine) Restore(upto uint64, get func(height uint64) (Finalized, error)) error {
+	if e.height != 1 || e.persist == nil {
+		return fmt.Errorf("restore requires a fresh engine with a persistent ledger")
+	}
+	for h := uint64(1); h <= upto; h++ {
+		f, err := get(h)
+		if err != nil {
+			return fmt.Errorf("restore height %d: %w", h, err)
+		}
+		if err = e.ValidateDecisionHeader(f); err != nil {
+			return fmt.Errorf("restore height %d: %w", h, err)
+		}
+		post, err := block.Validate(block.Context{ChainID: e.chain, Height: e.height, ParentHash: e.parent, Proposer: e.Proposer(e.height, f.OriginRound)}, e.committed, f.Block)
+		if err != nil {
+			return fmt.Errorf("restore height %d: %w", h, err)
+		}
+		hash, err := crypt.BlockHash(f.Block.Header)
+		if err != nil {
+			return fmt.Errorf("restore height %d: %w", h, err)
+		}
+		e.committed, e.parent = post, hash
+		e.height++
+	}
+	e.resetHeight()
+	e.out = Output{}
+	e.enter(Propose)
+	return nil
+}
+
 // ReceiveFinalized lets a lagging node validate a decision certificate for its
 // next height without voting in the decision's round. Every block and unique
 // PRECOMMIT is independently checked; a peer's finalized flag is never trusted.

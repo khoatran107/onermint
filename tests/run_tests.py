@@ -1,4 +1,4 @@
-"""Run unit tests and all real-process T1-T8 scenarios, preserving evidence."""
+"""Run Go unit tests, static checks and every real-process T1-T8 scenario script."""
 
 import argparse
 from datetime import datetime
@@ -60,8 +60,6 @@ def main():
                 action = event.get("Action")
                 if action == "pass" and name:
                     passed.add(name)
-                    if name.startswith("TestStage5/"):
-                        print(f"PASS {name}", flush=True)
                 elif action == "fail":
                     failures.append(name or event.get("Package"))
                     print(f"FAIL {failures[-1]}", flush=True)
@@ -81,21 +79,38 @@ def main():
         if processes is not None and processes.stdout is not None:
             processes.stdout.close()
 
-    missing = [f"T{i}" for i in range(1, 9) if f"TestStage5/T{i}" not in passed]
     summary = {"race": args.race, "exit_code": code, "passed_tests_and_subtests": len(passed),
-               "failed": failures, "missing_scenarios": missing, "skipped_helpers": skipped}
+               "failed": failures, "skipped_helpers": skipped}
     (output / "summary.json").write_text(json.dumps(summary, indent=2), encoding="utf-8")
-    if code or failures or missing:
-        raise RuntimeError(f"Suite incomplete/failed; inspect {output / 'go-test.jsonl'} and summary.json")
+    if code or failures:
+        raise RuntimeError(f"Go tests failed; inspect {output / 'go-test.jsonl'} and summary.json")
 
     vet = subprocess.run([go, "vet", "./..."], cwd=REPO, capture_output=True, text=True)
     (output / "go-vet.log").write_text(vet.stdout + vet.stderr, encoding="utf-8")
     summary["vet_exit_code"] = vet.returncode
-    (output / "summary.json").write_text(json.dumps(summary, indent=2), encoding="utf-8")
     if vet.returncode:
+        (output / "summary.json").write_text(json.dumps(summary, indent=2), encoding="utf-8")
         raise RuntimeError(f"Static checks failed: {vet.stderr}")
-    print(f"All T1-T8 passed; {len(passed)} passing tests/subtests; static checks passed.", flush=True)
-    print("Parent-side process-entry helpers run inside actual node/durability child processes.")
+    print(f"Go tests passed ({len(passed)} tests/subtests); static checks passed.", flush=True)
+
+    # Each scenario starts its own 10-process cluster, so they run one after another.
+    scenarios = {}
+    for script in sorted((REPO / "tests" / "scenarios").glob("t*.py")):
+        print(f"== {script.name}", flush=True)
+        with (output / f"{script.stem}.log").open("w", encoding="utf-8") as log:
+            run = subprocess.Popen([sys.executable, str(script)], cwd=REPO, env=dict(env, LAB01_GO=go),
+                                   stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True, encoding="utf-8")
+            for line in run.stdout:
+                log.write(line)
+                if line.lstrip().startswith(("ok", "FAIL", "RESULT")):
+                    print(line.rstrip(), flush=True)
+            scenarios[script.stem] = run.wait()
+    summary["scenarios"] = {name: ("PASS" if code == 0 else "FAIL") for name, code in scenarios.items()}
+    (output / "summary.json").write_text(json.dumps(summary, indent=2), encoding="utf-8")
+    bad = [name for name, code in scenarios.items() if code]
+    if bad:
+        raise RuntimeError(f"Scenarios failed: {', '.join(bad)}; see {output}/<scenario>.log")
+    print(f"All {len(scenarios)} scenarios passed; evidence in {output}", flush=True)
 
 
 if __name__ == "__main__":

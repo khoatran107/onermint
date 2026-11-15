@@ -50,7 +50,10 @@ func Generate(dir, outputRoot string, faultTolerance, basePort int, runMS uint64
 		Peers          []Peer
 		MinBlockTXs    int
 		BlockMaxWaitMS uint64
-	}{"lab01-local", faultTolerance, peers, 3, 2000}
+		BaseTimeoutMS  uint64
+		MaxBlockTXs    int
+		MaxBlockBytes  int
+	}{"lab01-local", faultTolerance, peers, 3, 2000, 2000, 128, (4 << 20) - (16 << 10)}
 	b, err := json.MarshalIndent(shared, "", "  ")
 	if err != nil {
 		return err

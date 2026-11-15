@@ -89,7 +89,9 @@ def load_configs(directory):
 
 def require_fresh_output(configs):
     """Only nodes about to start must have fresh outputs, not their peers."""
-    for _, _, output in configs:
+    for _, config, output in configs:
+        if config.get("Recover"):
+            continue
         if any((output / name).exists() for name in ("events.jsonl", "result.json", "running.lock")):
             raise ValueError(f"Existing node output at {output}; initialize a fresh cluster.")
 

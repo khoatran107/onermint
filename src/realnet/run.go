@@ -437,7 +437,7 @@ func (p *process) save() error {
 func Run(parent context.Context, c Config) (resultErr error) {
 	return runWithNode(parent, c, func(p *process) (localNode, error) {
 		c = p.cfg
-		return runtime.New(runtime.Config{ID: c.NodeID, ChainID: c.ChainID, F: c.F, Validators: p.ids, PrivateKey: p.key, BaseTimeout: c.BaseTimeoutMS, RetryInterval: c.RetryMS, TargetHeights: c.TargetHeights, Store: p.store, Behavior: c.Behavior, MempoolLimit: c.MempoolLimit, MempoolBytes: c.MempoolBytes, MaxTxBytes: c.MaxTxBytes, MinBlockTXs: c.MinBlockTXs, BlockMaxWait: c.BlockMaxWaitMS, MaxBlockTXs: c.MaxBlockTXs, MaxBlockBytes: c.MaxBlockBytes}, p)
+		return runtime.New(runtime.Config{ID: c.NodeID, ChainID: c.ChainID, F: c.F, Validators: p.ids, PrivateKey: p.key, BaseTimeout: c.BaseTimeoutMS, RetryInterval: c.RetryMS, TargetHeights: c.TargetHeights, Store: p.store, Behavior: c.Behavior, MempoolLimit: c.MempoolLimit, MempoolBytes: c.MempoolBytes, MaxTxBytes: c.MaxTxBytes, MinBlockTXs: c.MinBlockTXs, BlockMaxWait: c.BlockMaxWaitMS, MaxBlockTXs: c.MaxBlockTXs, MaxBlockBytes: c.MaxBlockBytes, Recover: c.Recover}, p)
 	})
 }
 
@@ -466,12 +466,15 @@ func runWithNode(parent context.Context, c Config, makeNode func(*process) (loca
 			resultErr = err
 		}
 	}()
-	if _, err = os.Stat(filepath.Join(c.OutputDir, "result.json")); err == nil {
-		return fmt.Errorf("existing ledger output: use a fresh run directory; recovery is not implemented")
+	logFlags := os.O_CREATE | os.O_EXCL | os.O_WRONLY
+	if c.Recover {
+		logFlags = os.O_CREATE | os.O_APPEND | os.O_WRONLY
+	} else if _, err = os.Stat(filepath.Join(c.OutputDir, "result.json")); err == nil {
+		return fmt.Errorf("existing ledger output: use a fresh run directory, or set Recover to replay it")
 	} else if !os.IsNotExist(err) {
 		return err
 	}
-	file, err := os.OpenFile(filepath.Join(c.OutputDir, "events.jsonl"), os.O_CREATE|os.O_EXCL|os.O_WRONLY, 0600)
+	file, err := os.OpenFile(filepath.Join(c.OutputDir, "events.jsonl"), logFlags, 0600)
 	if err != nil {
 		return err
 	}
@@ -495,8 +498,8 @@ func runWithNode(parent context.Context, c Config, makeNode func(*process) (loca
 			resultErr = err
 		}
 	}()
-	if store.Height() != 0 {
-		return fmt.Errorf("ledger exists on disk; validator signing-state recovery is not implemented; inspect it or use a fresh run directory")
+	if store.Height() != 0 && !c.Recover {
+		return fmt.Errorf("ledger exists on disk; set Recover to replay it (voting state of the interrupted height is not restored), inspect it, or use a fresh run directory")
 	}
 	p := &process{cfg: c, ctx: ctx, key: key, ids: ids, log: &logWriter{file: file, start: time.Now(), trace: c.Trace, console: c.ConsoleLog}, in: make(chan received, c.QueueLimit), jobs: make(chan *pb.Envelope, c.QueueLimit), faults: newFaultLayer(c.Faults), seen: make(map[transfer]bool), accepted: make(map[transfer]bool), requested: make(map[transfer]bool), blocked: make(map[int]uint64), arrivals: make(map[int]arrival), sessions: make(map[int]*peerSession), store: store, eventCounts: make(map[string]uint64)}
 	defer func() {
@@ -507,6 +510,9 @@ func runWithNode(parent context.Context, c Config, makeNode func(*process) (loca
 	p.runtime, err = makeNode(p)
 	if err != nil {
 		return err
+	}
+	if c.Recover {
+		p.Record(network.Event{Node: c.NodeID, Peer: -1, Event: "ledger_recovered", Height: store.Height()})
 	}
 	p.gossip, err = p.newGossip()
 	if err != nil {

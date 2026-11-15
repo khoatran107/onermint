@@ -34,6 +34,7 @@ type Config struct {
 	Store                                                                           *ledger.Store
 	Behavior                                                                        string
 	MempoolLimit, MempoolBytes, MaxTxBytes, MinBlockTXs, MaxBlockTXs, MaxBlockBytes int
+	Recover                                                                         bool // Full sync: replay and verify the local ledger before joining.
 }
 type wireHeader struct {
 	Proposal *cons.Proposal  `json:",omitempty"`
@@ -94,6 +95,11 @@ func New(c Config, port Port) (*Runtime, error) {
 	if types.ValidatorID(c.PrivateKey[32:]) != c.Validators[c.ID] {
 		return nil, fmt.Errorf("node ID does not match private key")
 	}
+	if c.Recover {
+		if err = e.Restore(c.Store.Height(), c.Store.Get); err != nil {
+			return nil, err
+		}
+	}
 	if c.MinBlockTXs == 0 {
 		c.MinBlockTXs = 1 // Direct unit/runtime users retain the old immediate behavior.
 	}
@@ -149,6 +155,28 @@ func (n *Runtime) advertise(h wireHeader, body types.BlockBody, height, round ui
 	// Finalized bodies are read from LevelDB on request.
 	n.ads = append(n.ads, a)
 	return n.announce(a)
+}
+
+// equivocate signs and broadcasts a second vote for the same height, round and
+// phase that conflicts with v (nil <-> block), so peers can observe real
+// double-signing from a Byzantine validator. It never re-signs honestly.
+func (n *Runtime) equivocate(v types.Vote) error {
+	w := v
+	if v.IsNil {
+		w.IsNil, w.BlockHash = false, crypt.HashBytes([]byte("equivocation"))
+	} else {
+		w.IsNil, w.BlockHash = true, types.Hash{}
+	}
+	w, err := crypt.SignVote(w, n.key)
+	if err != nil {
+		return err
+	}
+	payload, err := json.Marshal(w)
+	if err != nil {
+		return err
+	}
+	n.port.Record(network.Event{Node: n.id, Peer: -1, Event: "behavior_message", Height: w.Height, Round: w.Round, Phase: uint8(w.Phase), Reason: "equivocate"})
+	return n.broadcast(network.Message{Kind: network.Vote, Height: w.Height, Round: w.Round, Data: payload})
 }
 
 func (n *Runtime) process() error {
@@ -223,6 +251,11 @@ func (n *Runtime) process() error {
 		}
 		if err = n.broadcast(network.Message{Kind: network.Vote, Height: v.Height, Round: v.Round, Data: payload}); err != nil {
 			return err
+		}
+		if n.behavior == "equivocate" {
+			if err = n.equivocate(v); err != nil {
+				return err
+			}
 		}
 	}
 	for _, f := range o.Finalized {

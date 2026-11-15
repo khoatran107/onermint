@@ -34,6 +34,7 @@ type Config struct {
 	Behavior                                                                        string `json:",omitempty"`
 	Trace                                                                           bool   `json:",omitempty"`
 	ConsoleLog                                                                      bool   `json:",omitempty"`
+	Recover                                                                         bool   `json:",omitempty"` // Full sync from the existing ledger.db instead of requiring a fresh run directory.
 	MempoolLimit, MempoolBytes, MaxTxBytes, MinBlockTXs, MaxBlockTXs, MaxBlockBytes int
 	StartAtUnixMS                                                                   int64 // Optional common real-clock start for controlled experiments.
 }
@@ -63,12 +64,16 @@ func LoadConfig(path string) (Config, error) {
 			Peers          []Peer
 			MinBlockTXs    int
 			BlockMaxWaitMS uint64
+			BaseTimeoutMS  uint64
+			MaxBlockTXs    int
+			MaxBlockBytes  int
 		}
 		if err = json.Unmarshal(raw, &shared); err != nil {
 			return c, err
 		}
 		c.ChainID, c.F, c.Peers = shared.ChainID, shared.F, shared.Peers
 		c.MinBlockTXs, c.BlockMaxWaitMS = shared.MinBlockTXs, shared.BlockMaxWaitMS
+		c.BaseTimeoutMS, c.MaxBlockTXs, c.MaxBlockBytes = shared.BaseTimeoutMS, shared.MaxBlockTXs, shared.MaxBlockBytes
 	}
 	c.Defaults()
 	if !filepath.IsAbs(c.PrivateKeyFile) {
@@ -140,7 +145,7 @@ func (c *Config) Defaults() {
 }
 func (c Config) Validate() error {
 	switch c.Behavior {
-	case "", "honest", "invalid_signature", "wrong_domain", "duplicate_transaction", "replay_transaction", "silent_proposer", "crashed_proposer":
+	case "", "honest", "invalid_signature", "wrong_domain", "duplicate_transaction", "replay_transaction", "silent_proposer", "crashed_proposer", "equivocate":
 	default:
 		return fmt.Errorf("unknown node behavior %q", c.Behavior)
 	}
