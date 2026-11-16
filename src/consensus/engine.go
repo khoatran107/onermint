@@ -40,6 +40,7 @@ type Event struct {
 	Step          Step
 	Validator     types.ValidatorID
 	Phase         types.VotePhase
+	Proposer      int // Index of the round's proposer in the validator set; the node number.
 }
 
 // Output is a local queue of instructions, not network delivery. The owner
@@ -159,8 +160,12 @@ func New(c Config) (*Engine, error) {
 }
 
 func (e *Engine) Proposer(height, round uint64) types.ValidatorID {
+	return e.validators[e.proposerIndex(height, round)]
+}
+
+func (e *Engine) proposerIndex(height, round uint64) int {
 	n := uint64(len(e.validators))
-	return e.validators[((height-1)%n+round%n)%n]
+	return int(((height-1)%n + round%n) % n)
 }
 func (e *Engine) Status() Status {
 	return Status{e.height, e.round, e.step, e.locked, e.lockedHash, e.lockedRound}
@@ -184,7 +189,7 @@ func (e *Engine) Drain() Output {
 	return out
 }
 func (e *Engine) event(kind, reason string, h types.Hash) {
-	e.out.Events = append(e.out.Events, Event{Kind: kind, Reason: reason, Height: e.height, Round: e.round, Hash: h, Step: e.step, Validator: e.id})
+	e.out.Events = append(e.out.Events, Event{Kind: kind, Reason: reason, Height: e.height, Round: e.round, Hash: h, Step: e.step, Validator: e.id, Proposer: e.proposerIndex(e.height, e.round)})
 }
 func (e *Engine) reject(err error) error { e.event("reject", err.Error(), types.Hash{}); return err }
 func (e *Engine) resetHeight() {

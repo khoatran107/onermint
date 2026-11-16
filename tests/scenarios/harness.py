@@ -16,6 +16,7 @@ from urllib.request import urlopen
 REPO = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(REPO / "tests"))
 import run as launcher  # noqa: E402
+from client import Node, RPCError, Wallet  # noqa: E402
 
 FAILED = []
 
@@ -41,6 +42,7 @@ class Cluster:
 
     def __init__(self, name, network=None, nodes=None, go=None):
         self.name, self.go, self.procs = name, go or os.environ.get("LAB01_GO", "go"), {}
+        self._wallet, self._nodes = None, {}
         self.directory = REPO / "config" / name
         self.output = REPO / "local-runs" / name
         if not self.directory.exists():
@@ -106,16 +108,31 @@ class Cluster:
     def submit(self, nonce, key="spam", value=None, via=9):
         """Send `key` = `value` as transaction `nonce` to node `via`, signed by the external client key.
 
-        The client key is a fresh Ed25519 pair outside the validator set. It is created on the
-        first call and kept in config/<name>/client-key.hex so reruns sign identical transactions."""
+        Signing and the JSON-RPC call happen here (tests/client.py); the node binary is not
+        involved. The client key is a fresh Ed25519 pair outside the validator set. It is created
+        on the first call and kept in config/<name>/client-key.hex so reruns sign identical
+        transactions."""
         value = f"spam-{nonce}" if value is None else value
-        config = self.directory / f"node-{via:02d}.json"
-        command = [str(self.binary), "-config", str(config), "-submit", value,
-                   "-nonce", str(nonce), "-record", key, "-via", str(via),
-                   "-client-key", str(self.directory / "client-key.hex")]
-        result = subprocess.run(command, cwd=REPO, capture_output=True, text=True)
-        if result.returncode != 0:
-            raise RuntimeError(f"nonce {nonce} rejected by node {via}: {result.stderr.strip()}")
+        if self._wallet is None:
+            network = json.loads((self.directory / "network.json").read_text(encoding="utf-8"))
+            self._wallet = Wallet.load(self.directory / "client-key.hex",
+                                       [peer["PublicKey"] for peer in network["Peers"]])
+        if via not in self._nodes:
+            port = self.configs[via][1]["AdminAddress"].rpartition(":")[2]
+            self._nodes[via] = Node(f"127.0.0.1:{port}")  # AdminAddress may be 0.0.0.0
+        deadline = time.monotonic() + 60
+        while True:
+            try:
+                self._nodes[via].send(self._wallet, key, value, nonce)
+                return
+            except RPCError as error:
+                # A full mempool is back-pressure, not a rejection: wait for blocks to drain it.
+                transient = "exhausted" in error.message or "capacity exceeded" in error.message
+                if not transient or time.monotonic() > deadline:
+                    raise RuntimeError(f"nonce {nonce} rejected by node {via}: {error}") from error
+                time.sleep(0.2)
+            except OSError as error:
+                raise RuntimeError(f"nonce {nonce} rejected by node {via}: {error}") from error
 
     # --- queries (admin HTTP while the cluster runs, events.jsonl for the middle) ---
     def _get(self, node, path):

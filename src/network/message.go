@@ -57,4 +57,5 @@ type Event struct {
 	Phase, Step   uint8
 	StateRoot     string `json:",omitempty"`
 	Validator     string `json:",omitempty"`
+	Proposer      *int   `json:",omitempty"` // Set on consensus events: node number of the round's proposer.
 }

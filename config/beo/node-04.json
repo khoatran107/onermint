@@ -4,5 +4,10 @@
   "OutputDir": "../../local-runs/beo/node-04",
   "Behavior": "honest",
   "AdminAddress": "0.0.0.0:31004",
-  "SendGapMS": 1
+  "SendGapMS": 1,
+  "Faults": {
+    "Seed": 1,
+    "MinDelayMS": 400,
+    "MaxDelayMS": 3000
+  }
 }

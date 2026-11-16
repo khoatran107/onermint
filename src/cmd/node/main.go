@@ -4,7 +4,6 @@ import (
 	"blockchain-lab01/src/ledger"
 	runtime "blockchain-lab01/src/runtime"
 	"context"
-	"crypto/ed25519"
 	"encoding/json"
 	"errors"
 	"flag"
@@ -12,10 +11,8 @@ import (
 	"os"
 	"os/signal"
 	"path/filepath"
-	"time"
 
 	"blockchain-lab01/src/realnet"
-	"blockchain-lab01/src/types"
 )
 
 func main() {
@@ -30,20 +27,9 @@ func main() {
 	accountQueue := flag.Int("account-queue", 0, "queued transactions allowed per account")
 	globalSlots := flag.Int("global-slots", 0, "global transaction slots")
 	globalQueue := flag.Int("global-queue", 0, "global queued transactions")
-	submit := flag.String("submit", "", "submit this value as a signed transaction using the node's configured key")
-	record := flag.String("record", "message", "owned record name")
-	nonce := flag.Uint64("nonce", 0, "next sender nonce, starting at 1")
-	clientKey := flag.String("client-key", "", "with -submit: sign with this external client key instead of the node's validator key; created if missing")
-	via := flag.Int("via", -1, "ingress node for submission; defaults to signing node")
 	inspect := flag.Bool("inspect", false, "read the on-disk ledger after stopping the node")
 	exampleFaults := flag.Bool("example-network-faults", false, "generate example delay/drop/duplicate/reorder/replay policy")
 	flag.Parse()
-	submitRequested := false
-	flag.Visit(func(f *flag.Flag) {
-		if f.Name == "submit" {
-			submitRequested = true
-		}
-	})
 	var err error
 	if *initDir != "" {
 		policy := realnet.Policy{Seed: 1}
@@ -65,23 +51,6 @@ func main() {
 					if err == nil {
 						err = json.NewEncoder(os.Stdout).Encode(blocks)
 					}
-				}
-			} else if submitRequested {
-				ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-				defer cancel()
-				var id types.Hash
-				var submitErr error
-				if *clientKey != "" {
-					var key ed25519.PrivateKey
-					if key, submitErr = realnet.LoadClientKey(*clientKey, c.Peers); submitErr == nil {
-						id, submitErr = realnet.SubmitValueWithKey(ctx, c, key, *record, *submit, *nonce, *via)
-					}
-				} else {
-					id, submitErr = realnet.SubmitValue(ctx, c, *record, *submit, *nonce, *via)
-				}
-				err = submitErr
-				if err == nil {
-					fmt.Printf("transaction admitted: %x (not yet finalized)\n", id)
 				}
 			} else {
 				ctx, cancel := signal.NotifyContext(context.Background(), os.Interrupt)

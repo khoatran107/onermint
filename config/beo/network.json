@@ -53,14 +53,14 @@
       "GossipAddress": "127.0.0.1:30009"
     }
   ],
-  "MinBlockTXs": 3,
+  "MinBlockTXs": 50,
   "BlockMaxWaitMS": 2000,
-  "BaseTimeoutMS": 2000,
+  "BaseTimeoutMS": 4000,
   "MaxBlockTXs": 128,
   "MaxBlockBytes": 4177920,
   "MempoolTTLMS": 60000,
   "AccountSlots": 16,
-  "AccountQueue": 64,
+  "AccountQueue": 100000,
   "GlobalSlots": 1024,
-  "GlobalQueue": 256
+  "GlobalQueue": 1000000
 }

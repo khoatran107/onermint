@@ -81,16 +81,31 @@ func (l *logWriter) record(e network.Event) {
 		if e.Ref != (types.Hash{}) {
 			ref = hex.EncodeToString(e.Ref[:])
 		}
-		l.err = json.NewEncoder(l.file).Encode(struct {
-			Time   string
-			Node   int
-			Event  string
-			Height uint64 `json:",omitempty"`
-			Round  uint64 `json:",omitempty"`
-			Hash   string `json:",omitempty"`
-			Root   string `json:",omitempty"`
-			Detail string `json:",omitempty"`
-		}{time.Now().Format("15:04:05.000"), e.Node, e.Event, e.Height, e.Round, ref, e.StateRoot, e.Reason})
+		now := time.Now()
+		line := struct {
+			Ts       string // UTC with milliseconds; lets Alloy store the event time, not the ingest time.
+			Time     string
+			Node     int
+			Event    string
+			Height   uint64  `json:",omitempty"`
+			Round    *uint64 `json:",omitempty"`
+			Step     string  `json:",omitempty"`
+			Proposer *int    `json:",omitempty"`
+			Hash     string  `json:",omitempty"`
+			Root     string  `json:",omitempty"`
+			Detail   string  `json:",omitempty"`
+		}{Ts: now.UTC().Format("2006-01-02T15:04:05.000Z07:00"), Time: now.Format("15:04:05.000"), Node: e.Node, Event: e.Event, Height: e.Height, Hash: ref, Root: e.StateRoot, Detail: e.Reason}
+		if e.Round != 0 {
+			line.Round = &e.Round
+		}
+		if strings.HasPrefix(e.Event, "consensus_") {
+			// Round 0 and node 0 are real values here, so these are never omitted.
+			line.Round, line.Proposer = &e.Round, e.Proposer
+			if e.Step != 0 {
+				line.Step = consensusStepName(cons.Step(e.Step))
+			}
+		}
+		l.err = json.NewEncoder(l.file).Encode(line)
 		if l.console {
 			fmt.Printf("%s node=%d %-22s height=%d round=%d %s %s\n", time.Now().Format("15:04:05"), e.Node, e.Event, e.Height, e.Round, e.Reason, e.StateRoot)
 		}
@@ -100,7 +115,7 @@ func importantEvent(e string) bool {
 	switch e {
 	case "node_stop":
 		return true
-	case "listen", "membership", "mempool_accept", "mempool_evict", "transaction_reject", "transaction_replay", "block_wait_elapsed", "consensus_proposal", "consensus_timeout", "consensus_lock", "consensus_vote_signed", "state_commit", "proposer_crash", "block", "unblock", "reject_handshake", "ledger_error", "fault_drop", "fault_duplicate", "fault_reorder", "fault_replay", "queue_full", "behavior", "behavior_message":
+	case "listen", "membership", "mempool_accept", "mempool_evict", "transaction_reject", "transaction_replay", "block_wait_elapsed", "consensus_step", "consensus_proposal", "consensus_timeout", "consensus_lock", "consensus_vote_signed", "state_commit", "proposer_crash", "block", "unblock", "reject_handshake", "ledger_error", "fault_drop", "fault_duplicate", "fault_reorder", "fault_replay", "queue_full", "behavior", "behavior_message":
 		return true
 	}
 	return false

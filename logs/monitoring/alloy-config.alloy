@@ -6,11 +6,26 @@ loki.source.file "lab01" {
       job      = "lab01",
     },
   ]
-  forward_to = [loki.write.local.receiver]
+  forward_to = [loki.process.lab01.receiver]
   file_match {
     enabled     = true
     sync_period = "2s"
   }
+}
+
+// Store each line at the time the node logged it (field "Ts"), not the time Alloy read it.
+// Consensus steps last milliseconds, so ingest-time stamps would scramble their order.
+// Lines without "Ts" (older runs) keep the read time.
+loki.process "lab01" {
+  stage.json {
+    expressions = { ts = "Ts" }
+  }
+  stage.timestamp {
+    source            = "ts"
+    format            = "RFC3339Nano"
+    action_on_failure = "skip"
+  }
+  forward_to = [loki.write.local.receiver]
 }
 
 loki.write "local" {
