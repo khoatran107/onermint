@@ -2,7 +2,6 @@ package realnet
 
 import (
 	"context"
-	"embed"
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
@@ -34,9 +33,6 @@ type pendingTransaction struct {
 	Transaction   types.Transaction
 }
 
-//go:embed ui/*
-var uiFiles embed.FS
-
 func (p *process) adminHandler() http.Handler {
 	mux := http.NewServeMux()
 	mux.HandleFunc("/rpc", p.handleJSONRPC)
@@ -44,8 +40,6 @@ func (p *process) adminHandler() http.Handler {
 	mux.HandleFunc("/mempool", p.handleMempool)
 	mux.HandleFunc("/ledger", p.handleLedger)
 	mux.HandleFunc("/status", p.handleStatus)
-	mux.HandleFunc("/app.js", serveUIFile("ui/app.js", "text/javascript; charset=utf-8"))
-	mux.HandleFunc("/", serveUIFile("ui/index.html", "text/html; charset=utf-8"))
 	return mux
 }
 
@@ -65,23 +59,6 @@ func (p *process) snapshot(ctx context.Context, sender *types.PublicKey) (runtim
 		return runtimeSnapshot{}, ctx.Err()
 	case <-p.ctx.Done():
 		return runtimeSnapshot{}, fmt.Errorf("node stopping")
-	}
-}
-
-func serveUIFile(name, contentType string) http.HandlerFunc {
-	return func(w http.ResponseWriter, r *http.Request) {
-		if r.Method != http.MethodGet || (name == "ui/index.html" && r.URL.Path != "/") {
-			http.NotFound(w, r)
-			return
-		}
-		data, err := uiFiles.ReadFile(name)
-		if err != nil {
-			http.Error(w, "UI unavailable", http.StatusInternalServerError)
-			return
-		}
-		w.Header().Set("Content-Type", contentType)
-		w.Header().Set("Cache-Control", "no-store")
-		_, _ = w.Write(data)
 	}
 }
 

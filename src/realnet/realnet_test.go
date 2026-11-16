@@ -248,7 +248,15 @@ func TestLiveAdminInspection(t *testing.T) {
 	if rpcErr := rpcCall("missing_method", map[string]any{}, nil); rpcErr == nil || rpcErr.Code != -32601 {
 		t.Fatalf("missing JSON-RPC method was accepted: %+v", rpcErr)
 	}
-	for _, path := range []string{"/", "/metrics"} {
+	if response, err := http.Get("http://" + adminAddress + "/"); err != nil {
+		t.Fatal(err)
+	} else {
+		response.Body.Close()
+		if response.StatusCode != http.StatusNotFound {
+			t.Fatalf("node must not serve a client UI, got status %d", response.StatusCode)
+		}
+	}
+	for _, path := range []string{"/metrics"} {
 		response, err := http.Get("http://" + adminAddress + path)
 		if err != nil {
 			t.Fatal(err)

@@ -51,11 +51,21 @@ python tests/run.py --config-dir config/template --node 1
 ```
 
 Ba range cách nhau 1000 port nên không đổi khi thay `n`:
-gRPC `29000..`, GossipSub `30000..`, HTTP/UI `31000..`.
+gRPC `29000..`, GossipSub `30000..`, HTTP (JSON-RPC, `/metrics`, ...) `31000..`.
 
 ## Gửi transaction
 
-Mở UI của một honest node, ví dụ `http://127.0.0.1:31009/`.
+Client là một web app tĩnh độc lập trong `client/`; node không còn serve UI.
+Chạy client bằng một static server bất kỳ (cần `localhost` hoặc HTTPS để dùng
+WebCrypto Ed25519):
+
+```bash
+python3 -m http.server 8080 --directory client
+```
+
+Mở `http://localhost:8080/`, rồi nhập URL của node muốn tương tác vào ô
+**Node URL**, ví dụ `http://127.0.0.1:31009`. URL được nhớ trong browser và có
+thể đổi sang node khác bất cứ lúc nào.
 
 Người dùng chỉ nhập `Key` và `Value`. Browser tự tạo ví Ed25519 test-only, thêm
 owner, lấy nonce, ký transaction và gửi JSON-RPC. Private key không rời browser.

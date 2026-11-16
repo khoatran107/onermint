@@ -62,17 +62,38 @@ async function loadWallet(forceNew = false) {
   document.querySelector("#owner").textContent = wallet.publicHex;
 }
 
+const nodeUrlStorageKey = "lab01-node-url-v1";
+const defaultNodeUrl = "http://127.0.0.1:31000";
+
 function rpcURL() {
-  const raw = document.querySelector("#nodeUrl").value.trim() || location.origin;
-  return raw.replace(/\/$/, "") + "/rpc";
+  let raw = document.querySelector("#nodeUrl").value.trim();
+  if (!raw) throw new Error("Hãy nhập URL của node.");
+  if (!/^https?:\/\//i.test(raw)) raw = "http://" + raw;
+  return raw.replace(/\/+$/, "") + "/rpc";
+}
+
+function saveNodeUrl() {
+  try { localStorage.setItem(nodeUrlStorageKey, document.querySelector("#nodeUrl").value.trim()); } catch {}
+}
+
+function loadNodeUrl() {
+  let saved = null;
+  try { saved = localStorage.getItem(nodeUrlStorageKey); } catch {}
+  document.querySelector("#nodeUrl").value = saved || defaultNodeUrl;
 }
 
 let requestID = 0;
 async function rpc(method, params = {}) {
-  const response = await fetch(rpcURL(), {
-    method: "POST", headers: {"Content-Type": "application/json"},
-    body: JSON.stringify({jsonrpc: "2.0", id: ++requestID, method, params}),
-  });
+  const url = rpcURL();
+  let response;
+  try {
+    response = await fetch(url, {
+      method: "POST", headers: {"Content-Type": "application/json"},
+      body: JSON.stringify({jsonrpc: "2.0", id: ++requestID, method, params}),
+    });
+  } catch {
+    throw new Error(`Không kết nối được tới ${url}. Kiểm tra node đang chạy và URL đúng.`);
+  }
   if (!response.ok) throw new Error(`HTTP ${response.status}`);
   const body = await response.json();
   if (body.error) throw new Error(`${body.error.code}: ${body.error.message}`);
@@ -122,7 +143,8 @@ async function statusText() {
 if (typeof module !== "undefined") module.exports = {canonicalTxBytes, bytesToHex};
 
 if (typeof document !== "undefined") {
-  document.querySelector("#nodeUrl").value = location.origin;
+  loadNodeUrl();
+  document.querySelector("#nodeUrl").addEventListener("change", saveNodeUrl);
   document.querySelector("#send").addEventListener("click", event => run(event.currentTarget, sendTransaction));
   document.querySelector("#status").addEventListener("click", event => run(event.currentTarget, statusText));
   document.querySelector("#newWallet").addEventListener("click", event => run(event.currentTarget, async () => {
