@@ -96,6 +96,8 @@ reverse proxy/tunnel trước node.
 
 Người dùng chỉ nhập `Key` và `Value`. Browser tự tạo ví Ed25519 test-only, thêm
 owner, lấy nonce, ký transaction và gửi JSON-RPC. Private key không rời browser.
+Nút **Xem key-value state** hiển thị committed key-value và committed nonce của
+từng client trên node đang chọn; đổi Node URL để so sánh các validator.
 
 Bulk client dùng cùng JSON-RPC:
 
@@ -137,8 +139,9 @@ Nếu dashboard báo `No data`, kiểm tra `http://127.0.0.1:9090/targets`; các
 docker compose -f logs/monitoring/docker-compose.yml down
 ```
 
-API debug trên port HTTP của mỗi node: `/status`, `/mempool`, `/ledger`,
-`/metrics`. JSON-RPC nằm tại `POST /rpc`.
+API debug trên port HTTP của mỗi node: `/status`, `/state`, `/mempool`,
+`/ledger`, `/metrics`. JSON-RPC nằm tại `POST /rpc`; state dùng method
+`lab_state`.
 
 ## Config node
 

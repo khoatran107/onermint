@@ -4,6 +4,7 @@ package runtime
 import (
 	"blockchain-lab01/src/ledger"
 	"blockchain-lab01/src/mempool"
+	"blockchain-lab01/src/state"
 	"crypto/ed25519"
 	"encoding/hex"
 	"encoding/json"
@@ -125,6 +126,7 @@ func (n *Runtime) AccountNonce(sender types.PublicKey) uint64 {
 func (n *Runtime) MempoolSnapshot() []types.Transaction {
 	return n.pool.Snapshot()
 }
+func (n *Runtime) StateSnapshot() state.Snapshot { return n.engine.State().Snapshot() }
 func (n *Runtime) send(peer int, m network.Message) error {
 	if n.silent {
 		return nil

@@ -187,6 +187,10 @@ func TestLiveAdminInspection(t *testing.T) {
 	if status := get("/status", &statusView); status != http.StatusOK || statusView.NodeID != 0 || statusView.MempoolSize != 1 {
 		t.Fatalf("unexpected status response: %d %+v", status, statusView)
 	}
+	var stateHTTP stateView
+	if status := get("/state", &stateHTTP); status != http.StatusOK || stateHTTP.NodeID != 0 || stateHTTP.Height != 0 || len(stateHTTP.Records) != 0 || len(stateHTTP.Accounts) != 0 {
+		t.Fatalf("unexpected state response: %d %+v", status, stateHTTP)
+	}
 	rpcCall := func(method string, params any, target any) *rpcError {
 		t.Helper()
 		payload, err := json.Marshal(map[string]any{"jsonrpc": "2.0", "id": 1, "method": method, "params": params})
@@ -215,6 +219,10 @@ func TestLiveAdminInspection(t *testing.T) {
 	var rpcStatus rpcNodeStatus
 	if rpcErr := rpcCall("lab_status", map[string]any{}, &rpcStatus); rpcErr != nil || rpcStatus.NodeID != 0 || rpcStatus.FinalizedHeight != 0 || rpcStatus.ConsensusHeight != 1 || rpcStatus.MempoolTransactions != 1 || rpcStatus.Step == "" || rpcStatus.Lock != nil {
 		t.Fatalf("unexpected status RPC: %+v error=%v", rpcStatus, rpcErr)
+	}
+	var stateRPC stateView
+	if rpcErr := rpcCall("lab_state", map[string]any{}, &stateRPC); rpcErr != nil || stateRPC.NodeID != 0 || stateRPC.Height != 0 || len(stateRPC.Records) != 0 || len(stateRPC.Accounts) != 0 {
+		t.Fatalf("unexpected state RPC: %+v error=%v", stateRPC, rpcErr)
 	}
 	var account struct {
 		CommittedNonce uint64 `json:"committedNonce"`

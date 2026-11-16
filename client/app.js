@@ -19,6 +19,10 @@ function bytesToBase64(bytes) {
   return btoa(binary);
 }
 
+function base64ToBytes(value) {
+  return Uint8Array.from(atob(value), c => c.charCodeAt(0));
+}
+
 function u32(value) {
   const out = new Uint8Array(4);
   new DataView(out.buffer).setUint32(0, value, false);
@@ -156,6 +160,52 @@ async function statusText() {
   ].join("\n");
 }
 
+function appendCell(row, value, className = "") {
+  const cell = document.createElement("td");
+  cell.textContent = value;
+  cell.className = className;
+  row.appendChild(cell);
+}
+
+function displayState(state) {
+  const records = document.querySelector("#recordRows");
+  const accounts = document.querySelector("#accountRows");
+  records.replaceChildren();
+  accounts.replaceChildren();
+  const utf8 = new TextDecoder("utf-8", {fatal: true});
+  for (const record of state.records) {
+    const split = record.key.indexOf("/");
+    const owner = split < 0 ? "" : record.key.slice(0, split);
+    const key = split < 0 ? record.key : record.key.slice(split + 1);
+    const valueBytes = base64ToBytes(record.valueBase64);
+    let value;
+    try { value = utf8.decode(valueBytes); }
+    catch { value = "0x" + bytesToHex(valueBytes); }
+    const row = document.createElement("tr");
+    appendCell(row, owner, "mono"); appendCell(row, key, "mono"); appendCell(row, value);
+    records.appendChild(row);
+  }
+  for (const account of state.accounts) {
+    const row = document.createElement("tr");
+    appendCell(row, account.sender, "mono"); appendCell(row, String(account.committedNonce));
+    accounts.appendChild(row);
+  }
+  if (!state.records.length) {
+    const row = document.createElement("tr"); appendCell(row, "State chưa có key-value."); records.appendChild(row);
+  }
+  if (!state.accounts.length) {
+    const row = document.createElement("tr"); appendCell(row, "Chưa có client đã commit transaction."); accounts.appendChild(row);
+  }
+  document.querySelector("#stateSummary").textContent = `Node ${state.nodeId} · height ${state.height} · root ${state.stateRoot}`;
+  document.querySelector("#statePanel").hidden = false;
+}
+
+async function showState() {
+  const state = await rpc("lab_state");
+  displayState(state);
+  return `Đã đọc ${state.records.length} key-value và ${state.accounts.length} client từ node ${state.nodeId}.`;
+}
+
 if (typeof module !== "undefined") module.exports = {canonicalTxBytes, bytesToHex, targetAddressSpace};
 
 if (typeof document !== "undefined") {
@@ -163,6 +213,7 @@ if (typeof document !== "undefined") {
   document.querySelector("#nodeUrl").addEventListener("change", saveNodeUrl);
   document.querySelector("#send").addEventListener("click", event => run(event.currentTarget, sendTransaction));
   document.querySelector("#status").addEventListener("click", event => run(event.currentTarget, statusText));
+  document.querySelector("#state").addEventListener("click", event => run(event.currentTarget, showState));
   document.querySelector("#newWallet").addEventListener("click", event => run(event.currentTarget, async () => {
     await loadWallet(true); return {owner: wallet.publicHex, note: "Đã tạo ví mới; nonce bắt đầu lại từ 1."};
   }));

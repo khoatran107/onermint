@@ -2,6 +2,7 @@ package realnet
 
 import (
 	"context"
+	"encoding/base64"
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
@@ -12,11 +13,13 @@ import (
 
 	cons "blockchain-lab01/src/consensus"
 	crypt "blockchain-lab01/src/crypto"
+	"blockchain-lab01/src/state"
 	"blockchain-lab01/src/types"
 )
 
 type runtimeSnapshot struct {
 	transactions []types.Transaction
+	state        state.Snapshot
 	root         types.Hash
 	status       cons.Status
 	accountNonce uint64
@@ -40,7 +43,50 @@ func (p *process) adminHandler() http.Handler {
 	mux.HandleFunc("/mempool", p.handleMempool)
 	mux.HandleFunc("/ledger", p.handleLedger)
 	mux.HandleFunc("/status", p.handleStatus)
+	mux.HandleFunc("/state", p.handleState)
 	return mux
+}
+
+type stateRecordView struct {
+	Key         string `json:"key"`
+	ValueBase64 string `json:"valueBase64"`
+}
+
+type stateAccountView struct {
+	Sender         string `json:"sender"`
+	CommittedNonce uint64 `json:"committedNonce"`
+}
+
+type stateView struct {
+	NodeID    int                `json:"nodeId"`
+	ChainID   string             `json:"chainId"`
+	Height    uint64             `json:"height"`
+	StateRoot string             `json:"stateRoot"`
+	Records   []stateRecordView  `json:"records"`
+	Accounts  []stateAccountView `json:"accounts"`
+}
+
+func (p *process) makeStateView(snapshot runtimeSnapshot) stateView {
+	view := stateView{NodeID: p.cfg.NodeID, ChainID: p.cfg.ChainID, Height: p.store.Height(), StateRoot: hex.EncodeToString(snapshot.root[:]), Records: make([]stateRecordView, 0, len(snapshot.state.Records)), Accounts: make([]stateAccountView, 0, len(snapshot.state.Accounts))}
+	for _, record := range snapshot.state.Records {
+		view.Records = append(view.Records, stateRecordView{Key: record.Key, ValueBase64: base64.StdEncoding.EncodeToString(record.Value)})
+	}
+	for _, account := range snapshot.state.Accounts {
+		view.Accounts = append(view.Accounts, stateAccountView{Sender: hex.EncodeToString(account.Sender[:]), CommittedNonce: account.Nonce})
+	}
+	return view
+}
+
+func (p *process) handleState(w http.ResponseWriter, r *http.Request) {
+	if !requireGET(w, r) {
+		return
+	}
+	snapshot, err := p.snapshot(r.Context(), nil)
+	if err != nil {
+		writeAdminError(w, http.StatusServiceUnavailable, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, p.makeStateView(snapshot))
 }
 
 func (p *process) snapshot(ctx context.Context, sender *types.PublicKey) (runtimeSnapshot, error) {
@@ -234,6 +280,12 @@ func (p *process) callRPC(ctx context.Context, method string, raw json.RawMessag
 			status.Lock = &rpcLockStatus{Round: snapshot.status.LockedRound, BlockHash: "0x" + hex.EncodeToString(snapshot.status.LockedHash[:])}
 		}
 		return status, nil
+	case "lab_state":
+		snapshot, err := p.snapshot(ctx, nil)
+		if err != nil {
+			return nil, &rpcError{-32000, err.Error()}
+		}
+		return p.makeStateView(snapshot), nil
 	case "lab_getAccount":
 		var params struct {
 			Sender string `json:"sender"`

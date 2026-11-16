@@ -2,9 +2,11 @@
 package state
 
 import (
+	"bytes"
 	"encoding/hex"
 	"fmt"
 	"math"
+	"sort"
 	"strings"
 	"unicode/utf8"
 
@@ -19,12 +21,41 @@ type State struct {
 	nonces  map[types.PublicKey]uint64 // Last successfully executed nonce.
 }
 
+type RecordSnapshot struct {
+	Key   string
+	Value []byte
+}
+
+type AccountSnapshot struct {
+	Sender types.PublicKey
+	Nonce  uint64
+}
+
+type Snapshot struct {
+	Records  []RecordSnapshot
+	Accounts []AccountSnapshot
+}
+
 func (s State) Get(key string) ([]byte, bool) {
 	v, ok := s.records[key]
 	return append([]byte(nil), v...), ok
 }
 
 func (s State) LastNonce(sender types.PublicKey) uint64 { return s.nonces[sender] }
+
+// Snapshot returns a deterministic deep copy for read-only inspection.
+func (s State) Snapshot() Snapshot {
+	out := Snapshot{Records: make([]RecordSnapshot, 0, len(s.records)), Accounts: make([]AccountSnapshot, 0, len(s.nonces))}
+	for key, value := range s.records {
+		out.Records = append(out.Records, RecordSnapshot{Key: key, Value: append([]byte(nil), value...)})
+	}
+	for sender, nonce := range s.nonces {
+		out.Accounts = append(out.Accounts, AccountSnapshot{Sender: sender, Nonce: nonce})
+	}
+	sort.Slice(out.Records, func(i, j int) bool { return out.Records[i].Key < out.Records[j].Key })
+	sort.Slice(out.Accounts, func(i, j int) bool { return bytes.Compare(out.Accounts[i].Sender[:], out.Accounts[j].Sender[:]) < 0 })
+	return out
+}
 
 func (s State) clone() State {
 	next := State{records: make(map[string][]byte, len(s.records)), nonces: make(map[types.PublicKey]uint64, len(s.nonces))}

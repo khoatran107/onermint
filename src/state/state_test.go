@@ -90,6 +90,24 @@ func TestOrderedExecutionAndIsolation(t *testing.T) {
 	}
 }
 
+func TestSnapshotIsDeterministicAndIsolated(t *testing.T) {
+	first := transaction(t, 2, 1, "z", "second")
+	second := transaction(t, 1, 1, "a", "first")
+	s, err := Execute("lab", State{}, []types.Transaction{first, second})
+	if err != nil {
+		t.Fatal(err)
+	}
+	snapshot := s.Snapshot()
+	if len(snapshot.Records) != 2 || snapshot.Records[0].Key > snapshot.Records[1].Key || len(snapshot.Accounts) != 2 || bytes.Compare(snapshot.Accounts[0].Sender[:], snapshot.Accounts[1].Sender[:]) >= 0 {
+		t.Fatal("state snapshot is not deterministically ordered")
+	}
+	snapshot.Records[0].Value[0] ^= 1
+	value, _ := s.Get(snapshot.Records[0].Key)
+	if bytes.Equal(value, snapshot.Records[0].Value) {
+		t.Fatal("state snapshot exposed mutable storage")
+	}
+}
+
 func TestRejectedBatchesAreAtomic(t *testing.T) {
 	a := transaction(t, 1, 1, "message", "first")
 	first, err := Execute("lab", State{}, []types.Transaction{a})

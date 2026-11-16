@@ -23,6 +23,7 @@ import (
 	"blockchain-lab01/src/network"
 	pb "blockchain-lab01/src/proto"
 	runtime "blockchain-lab01/src/runtime"
+	"blockchain-lab01/src/state"
 	"blockchain-lab01/src/types"
 	"google.golang.org/grpc"
 )
@@ -627,6 +628,7 @@ func runWithNode(parent context.Context, c Config, makeNode func(*process) (loca
 				snapshot := runtimeSnapshot{}
 				reader, ok := p.runtime.(interface {
 					MempoolSnapshot() []types.Transaction
+					StateSnapshot() state.Snapshot
 					Status() cons.Status
 					AccountNonce(types.PublicKey) uint64
 				})
@@ -634,6 +636,7 @@ func runWithNode(parent context.Context, c Config, makeNode func(*process) (loca
 					snapshot.err = fmt.Errorf("mempool inspection unavailable for this node runtime")
 				} else {
 					snapshot.transactions = reader.MempoolSnapshot()
+					snapshot.state = reader.StateSnapshot()
 					snapshot.status = reader.Status()
 					if r.query.sender != nil {
 						snapshot.accountNonce = reader.AccountNonce(*r.query.sender)
