@@ -3,12 +3,10 @@ package realnet
 import (
 	"bytes"
 	"context"
-	"crypto/ed25519"
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"net/http"
-	"os"
 	"strings"
 	"time"
 
@@ -170,58 +168,4 @@ func (c *TransactionClient) Submit(ctx context.Context, tx types.Transaction) (t
 		return zero, fmt.Errorf("invalid transaction receipt")
 	}
 	return types.Hash(reply.TransactionId), nil
-}
-
-// LoadClientKey reads an external client key, creating a fresh one at path if
-// the file does not exist yet. A key that belongs to the validator set is refused.
-func LoadClientKey(path string, peers []Peer) (ed25519.PrivateKey, error) {
-	raw, err := os.ReadFile(path)
-	if os.IsNotExist(err) {
-		_, key, genErr := crypt.GenerateIdentity()
-		if genErr != nil {
-			return nil, genErr
-		}
-		if err = os.WriteFile(path, []byte(hex.EncodeToString(key)), 0600); err != nil {
-			return nil, err
-		}
-		raw = []byte(hex.EncodeToString(key))
-	} else if err != nil {
-		return nil, err
-	}
-	b, err := hex.DecodeString(string(raw))
-	if err != nil || len(b) != ed25519.PrivateKeySize {
-		return nil, fmt.Errorf("invalid client key file")
-	}
-	key := ed25519.PrivateKey(b)
-	for _, peer := range peers {
-		if strings.EqualFold(hex.EncodeToString(key[32:]), peer.PublicKey) {
-			return nil, fmt.Errorf("client key must not be a validator key")
-		}
-	}
-	return key, nil
-}
-
-// SubmitValue signs with the node's own validator key.
-func SubmitValue(ctx context.Context, c Config, record, value string, nonce uint64, via int) (types.Hash, error) {
-	_, key, err := c.keys()
-	if err != nil {
-		return types.Hash{}, err
-	}
-	return SubmitValueWithKey(ctx, c, key, record, value, nonce, via)
-}
-
-// SubmitValueWithKey signs with any account key, e.g. an external client key.
-func SubmitValueWithKey(ctx context.Context, c Config, key ed25519.PrivateKey, record, value string, nonce uint64, via int) (types.Hash, error) {
-	pub := types.PublicKey(key[32:])
-	tx, err := crypt.SignTransaction(types.Transaction{ChainID: c.ChainID, Sender: pub, TargetKey: hex.EncodeToString(pub[:]) + "/" + record, Value: []byte(value), Nonce: nonce}, key)
-	if err != nil {
-		return types.Hash{}, err
-	}
-	if via < 0 {
-		via = c.NodeID
-	}
-	if via >= len(c.Peers) {
-		return types.Hash{}, fmt.Errorf("unknown ingress node")
-	}
-	return SubmitTransaction(ctx, c.Peers[via].Address, tx)
 }

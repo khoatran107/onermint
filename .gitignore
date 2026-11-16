@@ -38,3 +38,5 @@ Lab01.pdf
 # Generated local clusters contain private keys and runtime output.
 /local-runs/
 __pycache__/
+# scripted client test wallets (private keys)
+tests/wallets/

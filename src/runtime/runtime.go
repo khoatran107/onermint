@@ -203,7 +203,7 @@ func (n *Runtime) process() error {
 	}
 	o := n.engine.Drain()
 	for _, e := range o.Events {
-		n.port.Record(network.Event{Node: n.id, Peer: -1, Event: "consensus_" + e.Kind, Height: e.Height, Round: e.Round, Ref: e.Hash, Reason: e.Reason, Phase: uint8(e.Phase), Step: uint8(e.Step), Validator: hex.EncodeToString(e.Validator[:])})
+		n.port.Record(network.Event{Node: n.id, Peer: -1, Event: "consensus_" + e.Kind, Height: e.Height, Round: e.Round, Ref: e.Hash, Reason: e.Reason, Phase: uint8(e.Phase), Step: uint8(e.Step), Validator: hex.EncodeToString(e.Validator[:]), Proposer: &e.Proposer})
 	}
 	for _, timer := range o.Timers {
 		timer := timer

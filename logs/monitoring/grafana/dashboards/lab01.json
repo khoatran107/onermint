@@ -28,7 +28,7 @@
       "title": "How to read this dashboard",
       "options": {
         "mode": "markdown",
-        "content": "No data? Start validators, then run `python tests/prepare_monitoring.py --config-dir config/<scenario>` and restart Prometheus. **Finalized gap must remain 0.** Consensus height is normally finalized height + 1."
+        "content": "No data? Start validators, then run `python tests/prepare_monitoring.py --config-dir config/<scenario>` and restart Prometheus. **Finalized gap must remain 0.** Consensus height is normally finalized height + 1. The consensus timeline and proposer table are read from node logs (Loki); zoom to a few minutes to see individual steps."
       },
       "gridPos": {"x": 0, "y": 0, "w": 24, "h": 3}
     },
@@ -92,20 +92,76 @@
     {
       "id": 8,
       "type": "state-timeline",
-      "title": "Consensus step",
-      "description": "1=PROPOSE, 2=PREVOTE, 3=PRECOMMIT",
-      "datasource": {"type": "prometheus", "uid": "prometheus"},
-      "targets": [{"expr": "lab01_consensus_step{node=~\"$node\"}", "legendFormat": "node {{node}}"}],
+      "title": "Consensus step (one entry per node log line)",
+      "description": "Built from consensus_step log lines, not from sampled gauges, so millisecond steps are not missed. PROPOSING = this node is the proposer of the round. Zoom to a short range: the query returns at most 5000 lines.",
+      "datasource": {"type": "loki", "uid": "loki"},
+      "targets": [
+        {
+          "refId": "A",
+          "queryType": "range",
+          "direction": "forward",
+          "maxLines": 5000,
+          "expr": "{job=\"lab01\"} | json | Event=\"consensus_step\" | Node=~\"$node\" | label_format role=`{{ if and (eq .Step \"PROPOSE\") (eq .Proposer .Node) }}PROPOSING{{ else }}{{ .Step }}{{ end }}` | line_format `{\"node\":\"{{.Node}}\",\"state\":\"{{.role}}\"}`"
+        }
+      ],
+      "transformations": [
+        {"id": "extractFields", "options": {"source": "Line", "format": "json", "replace": false, "keepTime": false}},
+        {"id": "filterFieldsByName", "options": {"include": {"names": ["Time", "node", "state"]}}},
+        {"id": "sortBy", "options": {"fields": {}, "sort": [{"field": "node"}, {"field": "Time"}]}},
+        {"id": "partitionByValues", "options": {"fields": ["node"], "naming": {"asLabels": true}}}
+      ],
       "fieldConfig": {
         "defaults": {
+          "displayName": "node ${__field.labels.node}",
+          "custom": {"fillOpacity": 85, "lineWidth": 0},
           "mappings": [
-            {"type": "value", "options": {"1": {"text": "PROPOSE", "color": "blue"}, "2": {"text": "PREVOTE", "color": "orange"}, "3": {"text": "PRECOMMIT", "color": "green"}}}
+            {"type": "value", "options": {
+              "PROPOSE": {"text": "PROPOSE", "color": "blue", "index": 0},
+              "PROPOSING": {"text": "PROPOSING", "color": "purple", "index": 1},
+              "PREVOTE": {"text": "PREVOTE", "color": "orange", "index": 2},
+              "PRECOMMIT": {"text": "PRECOMMIT", "color": "green", "index": 3}
+            }}
           ]
         },
         "overrides": []
       },
-      "options": {"mergeValues": true, "showValue": "always", "rowHeight": 0.8},
-      "gridPos": {"x": 0, "y": 15, "w": 12, "h": 8}
+      "options": {"mergeValues": false, "showValue": "auto", "rowHeight": 0.8, "alignValue": "left", "legend": {"showLegend": true, "placement": "bottom"}},
+      "gridPos": {"x": 0, "y": 15, "w": 14, "h": 9}
+    },
+    {
+      "id": 17,
+      "type": "table",
+      "title": "Proposer per height and round",
+      "description": "Which node proposes each (height, round). Round > 0 means the earlier round timed out.",
+      "datasource": {"type": "loki", "uid": "loki"},
+      "targets": [
+        {
+          "refId": "A",
+          "queryType": "range",
+          "direction": "forward",
+          "maxLines": 5000,
+          "expr": "{job=\"lab01\"} | json | Event=\"consensus_step\" | Step=\"PROPOSE\" | line_format `{\"height\":\"{{.Height}}\",\"round\":\"{{.Round}}\",\"proposer\":\"{{.Proposer}}\"}`"
+        }
+      ],
+      "transformations": [
+        {"id": "extractFields", "options": {"source": "Line", "format": "json", "replace": false, "keepTime": false}},
+        {"id": "filterFieldsByName", "options": {"include": {"names": ["Time", "height", "round", "proposer"]}}},
+        {"id": "convertFieldType", "options": {"conversions": [
+          {"targetField": "height", "destinationType": "number"},
+          {"targetField": "round", "destinationType": "number"},
+          {"targetField": "proposer", "destinationType": "number"}
+        ]}},
+        {"id": "groupBy", "options": {"fields": {
+          "height": {"operation": "groupby"},
+          "round": {"operation": "groupby"},
+          "proposer": {"operation": "aggregate", "aggregations": ["last"]},
+          "Time": {"operation": "aggregate", "aggregations": ["min"]}
+        }}},
+        {"id": "organize", "options": {"renameByName": {"height": "Height", "round": "Round", "proposer (last)": "Proposer node", "Time (min)": "First seen"}}},
+        {"id": "sortBy", "options": {"fields": {}, "sort": [{"field": "Height", "desc": true}, {"field": "Round", "desc": true}]}}
+      ],
+      "options": {"showHeader": true, "cellHeight": "sm"},
+      "gridPos": {"x": 14, "y": 15, "w": 10, "h": 9}
     },
     {
       "id": 9,
@@ -116,7 +172,7 @@
         {"expr": "lab01_consensus_height{node=~\"$node\"}", "legendFormat": "height node {{node}}"},
         {"expr": "lab01_consensus_round{node=~\"$node\"}", "legendFormat": "round node {{node}}"}
       ],
-      "gridPos": {"x": 12, "y": 15, "w": 12, "h": 8}
+      "gridPos": {"x": 0, "y": 24, "w": 24, "h": 6}
     },
     {
       "id": 10,
@@ -126,7 +182,7 @@
       "targets": [
         {"expr": "sum by (node,event) (rate(lab01_events_total{node=~\"$node\",event=~\"state_commit|block_wait_elapsed\"}[1m]))", "legendFormat": "node {{node}} {{event}}"}
       ],
-      "gridPos": {"x": 0, "y": 23, "w": 8, "h": 7}
+      "gridPos": {"x": 0, "y": 30, "w": 8, "h": 7}
     },
     {
       "id": 11,
@@ -136,7 +192,7 @@
       "targets": [
         {"expr": "sum by (node,event) (rate(lab01_events_total{node=~\"$node\",event=~\"consensus_timeout|transaction_reject|queue_full\"}[1m]))", "legendFormat": "node {{node}} {{event}}"}
       ],
-      "gridPos": {"x": 8, "y": 23, "w": 8, "h": 7}
+      "gridPos": {"x": 8, "y": 30, "w": 8, "h": 7}
     },
     {
       "id": 12,
@@ -146,7 +202,7 @@
       "targets": [
         {"expr": "sum by (node,event) (rate(lab01_events_total{node=~\"$node\",event=~\"fault_.*|block|unblock\"}[1m]))", "legendFormat": "node {{node}} {{event}}"}
       ],
-      "gridPos": {"x": 16, "y": 23, "w": 8, "h": 7}
+      "gridPos": {"x": 16, "y": 30, "w": 8, "h": 7}
     },
     {
       "id": 13,
@@ -154,7 +210,7 @@
       "title": "Outbound queue",
       "datasource": {"type": "prometheus", "uid": "prometheus"},
       "targets": [{"expr": "lab01_outbound_queue{node=~\"$node\"}", "legendFormat": "node {{node}}"}],
-      "gridPos": {"x": 0, "y": 30, "w": 8, "h": 7}
+      "gridPos": {"x": 0, "y": 37, "w": 8, "h": 7}
     },
     {
       "id": 14,
@@ -163,7 +219,7 @@
       "datasource": {"type": "prometheus", "uid": "prometheus"},
       "targets": [{"expr": "max(lab01_config_min_block_transactions{node=~\"$node\"})", "instant": true}],
       "options": {"colorMode": "value", "graphMode": "none", "textMode": "value_and_name"},
-      "gridPos": {"x": 8, "y": 30, "w": 8, "h": 7}
+      "gridPos": {"x": 8, "y": 37, "w": 8, "h": 7}
     },
     {
       "id": 15,
@@ -173,7 +229,7 @@
       "targets": [{"expr": "max(lab01_config_block_max_wait_milliseconds{node=~\"$node\"})", "instant": true}],
       "fieldConfig": {"defaults": {"unit": "ms"}, "overrides": []},
       "options": {"colorMode": "value", "graphMode": "none", "textMode": "value_and_name"},
-      "gridPos": {"x": 16, "y": 30, "w": 8, "h": 7}
+      "gridPos": {"x": 16, "y": 37, "w": 8, "h": 7}
     },
     {
       "id": 16,
@@ -187,7 +243,7 @@
         }
       ],
       "options": {"showTime": true, "wrapLogMessage": true, "enableLogDetails": true, "sortOrder": "Descending"},
-      "gridPos": {"x": 0, "y": 37, "w": 24, "h": 12}
+      "gridPos": {"x": 0, "y": 44, "w": 24, "h": 12}
     }
   ]
 }
