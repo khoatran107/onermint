@@ -100,19 +100,25 @@ let requestID = 0;
 async function rpc(method, params = {}) {
   const url = rpcURL();
   let response;
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), 5000);
   try {
     const options = {
       method: "POST", headers: {"Content-Type": "application/json"},
       body: JSON.stringify({jsonrpc: "2.0", id: ++requestID, method, params}),
+      signal: controller.signal,
     };
     const addressSpace = targetAddressSpace(url);
     if (addressSpace) options.targetAddressSpace = addressSpace;
     response = await fetch(url, options);
-  } catch {
+  } catch (error) {
     const permission = location.protocol === "https:" && url.startsWith("http:")
       ? " Hãy cho phép quyền truy cập Local Network khi browser hỏi."
       : "";
-    throw new Error(`Không kết nối được tới ${url}. Kiểm tra node, URL và Windows Firewall.${permission}`);
+    const reason = error.name === "AbortError" ? "Node không phản hồi sau 5 giây." : "Không kết nối được tới node.";
+    throw new Error(`${reason} Kiểm tra ${url}, node và Windows Firewall.${permission}`);
+  } finally {
+    clearTimeout(timeout);
   }
   if (!response.ok) throw new Error(`HTTP ${response.status}`);
   const body = await response.json();
@@ -137,8 +143,8 @@ async function sendTransaction() {
   return {transactionID, nonce: tx.Nonce, targetKey: tx.TargetKey, node: rpcURL()};
 }
 
-async function run(button, action) {
-  const output = document.querySelector("#output");
+async function run(button, action, outputSelector = "#output") {
+  const output = document.querySelector(outputSelector);
   button.disabled = true;
   try {
     const result = await action();
@@ -210,7 +216,11 @@ if (typeof module !== "undefined") module.exports = {canonicalTxBytes, bytesToHe
 
 if (typeof document !== "undefined") {
   loadNodeUrl();
-  document.querySelector("#nodeUrl").addEventListener("change", saveNodeUrl);
+  document.querySelector("#nodeUrl").addEventListener("change", () => {
+    saveNodeUrl();
+    document.querySelector("#statePanel").hidden = true;
+    document.querySelector("#output").textContent = "Node URL đã đổi. Hãy tải lại status/state.";
+  });
   document.querySelector("#send").addEventListener("click", event => run(event.currentTarget, sendTransaction));
   document.querySelector("#status").addEventListener("click", event => run(event.currentTarget, statusText));
   document.querySelector("#state").addEventListener("click", event => run(event.currentTarget, showState));
