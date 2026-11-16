@@ -1,0 +1,8 @@
+{
+  "NodeID": 5,
+  "NetworkFile": "network.json",
+  "OutputDir": "../../local-runs/beo/node-05",
+  "Behavior": "honest",
+  "AdminAddress": "0.0.0.0:31005",
+  "SendGapMS": 1
+}

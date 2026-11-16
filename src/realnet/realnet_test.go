@@ -122,6 +122,8 @@ func TestLiveAdminInspection(t *testing.T) {
 		t.Fatal(err)
 	}
 	cfg := Config{ChainID: "admin-test", NodeID: 0, F: 3, Peers: peers, PrivateKeyFile: keyPath, OutputDir: filepath.Join(dir, "node"), AdminAddress: "127.0.0.1:0", BaseTimeoutMS: 1500, RetryMS: 400, RunForMS: 3000, TargetHeights: 1, SendGapMS: 1, QueueLimit: 2048, ReceiveLimit: 1000, ReceiveWindowMS: 1000, BlockMS: 200}
+	cfg.MempoolTTLMS, cfg.AccountSlots, cfg.AccountQueue, cfg.GlobalSlots, cfg.GlobalQueue = 60_000, 16, 64, 1024, 256
+	cfg.Defaults()
 	ctx, cancel := context.WithCancel(context.Background())
 	done := make(chan error, 1)
 	go func() { done <- Run(ctx, cfg) }()
@@ -295,6 +297,8 @@ func TestRealSocketRejectsInvalidHeadersAndBodies(t *testing.T) {
 		t.Fatal(err)
 	}
 	cfg := Config{ChainID: "wire-test", NodeID: 0, F: 3, Peers: peers, PrivateKeyFile: keyPath, OutputDir: filepath.Join(dir, "output"), BaseTimeoutMS: 1500, RetryMS: 400, RunForMS: 4000, TargetHeights: 1, SendGapMS: 1, QueueLimit: 2048, ReceiveLimit: 4, ReceiveWindowMS: 10000, BlockMS: 200, Trace: true}
+	cfg.MempoolTTLMS, cfg.AccountSlots, cfg.AccountQueue, cfg.GlobalSlots, cfg.GlobalQueue = 60_000, 16, 64, 1024, 256
+	cfg.Defaults()
 	ctx, cancel := context.WithCancel(context.Background())
 	done := make(chan error, 1)
 	go func() { done <- Run(ctx, cfg) }()

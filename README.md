@@ -113,7 +113,7 @@ Ví dụ `config/template/node-00.json`:
   "NetworkFile": "network.json",
   "OutputDir": "../../local-runs/template/node-00",
   "Behavior": "honest",
-  "AdminAddress": "127.0.0.1:31000",
+  "AdminAddress": "0.0.0.0:31000",
   "SendGapMS": 1
 }
 ```

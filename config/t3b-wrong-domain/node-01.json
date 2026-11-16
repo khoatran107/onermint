@@ -3,7 +3,7 @@
   "NetworkFile": "network.json",
   "OutputDir": "../../local-runs/t3b-wrong-domain/node-01",
   "Behavior": "honest",
-  "AdminAddress": "127.0.0.1:31001",
+  "AdminAddress": "0.0.0.0:31001",
   "SendGapMS": 1,
   "Trace": true
 }

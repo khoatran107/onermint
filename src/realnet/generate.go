@@ -89,7 +89,7 @@ func Generate(dir, outputRoot string, faultTolerance, basePort int, runMS uint64
 			SendGapMS    uint64
 			RunForMS     uint64  `json:",omitempty"`
 			Faults       *Policy `json:",omitempty"`
-		}{NodeID: i, NetworkFile: "network.json", OutputDir: filepath.Join(outputRoot, fmt.Sprintf("node-%02d", i)), Behavior: "honest", AdminAddress: fmt.Sprintf("127.0.0.1:%d", basePort+adminPortShift+i), SendGapMS: 1, RunForMS: runMS}
+		}{NodeID: i, NetworkFile: "network.json", OutputDir: filepath.Join(outputRoot, fmt.Sprintf("node-%02d", i)), Behavior: "honest", AdminAddress: fmt.Sprintf("0.0.0.0:%d", basePort+adminPortShift+i), SendGapMS: 1, RunForMS: runMS}
 		if faults != (Policy{}) && faults != (Policy{Seed: 1}) {
 			c.Faults = &policy
 		}

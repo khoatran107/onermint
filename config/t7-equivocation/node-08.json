@@ -3,7 +3,7 @@
   "NetworkFile": "network.json",
   "OutputDir": "../../local-runs/t7-equivocation/node-08",
   "Behavior": "honest",
-  "AdminAddress": "127.0.0.1:31008",
+  "AdminAddress": "0.0.0.0:31008",
   "SendGapMS": 1,
   "Trace": true
 }

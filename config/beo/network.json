@@ -1,0 +1,66 @@
+{
+  "ChainID": "lab01-local",
+  "F": 3,
+  "Peers": [
+    {
+      "Address": "127.0.0.1:29000",
+      "PublicKey": "c8e84b98a824ea591dfbcd4e1dc5291f52b5311bc26df77ceb35876ee75aea3e",
+      "GossipAddress": "127.0.0.1:30000"
+    },
+    {
+      "Address": "127.0.0.1:29001",
+      "PublicKey": "594f92ea262891bb5d67ee8e831b9276016a44c8b3823aa66e4e7603e88092d8",
+      "GossipAddress": "127.0.0.1:30001"
+    },
+    {
+      "Address": "127.0.0.1:29002",
+      "PublicKey": "da2d96a58133f916a2ed75f1f606bbfd023971ce086c32e55714f17d67dc4e2a",
+      "GossipAddress": "127.0.0.1:30002"
+    },
+    {
+      "Address": "127.0.0.1:29003",
+      "PublicKey": "5b2a44ad9bae9aa361ec3d7788517c032049141a5e8cd9127f3e1832deef7ba8",
+      "GossipAddress": "127.0.0.1:30003"
+    },
+    {
+      "Address": "127.0.0.1:29004",
+      "PublicKey": "41561971f8e4beedeb04f9c62cad332dff92d0daf9152b20b14db1bc1e6e7f80",
+      "GossipAddress": "127.0.0.1:30004"
+    },
+    {
+      "Address": "127.0.0.1:29005",
+      "PublicKey": "2910d57b2015b75cdf03c55e257ea1bd26e4b403f329b283d1d02710514cae16",
+      "GossipAddress": "127.0.0.1:30005"
+    },
+    {
+      "Address": "127.0.0.1:29006",
+      "PublicKey": "c9559115057a1949a5018755dffb82947be5ab8676036010e9e6076dcd49c5a3",
+      "GossipAddress": "127.0.0.1:30006"
+    },
+    {
+      "Address": "127.0.0.1:29007",
+      "PublicKey": "60ba3bfb4e74ccc09b3fa88bc213fbcbcb36997c60fb1c562705cff5da52ac04",
+      "GossipAddress": "127.0.0.1:30007"
+    },
+    {
+      "Address": "127.0.0.1:29008",
+      "PublicKey": "369f5e9015649f61d9f8f406cc2e7c9dce82f1f6e0258e6598baca89e1b20eb8",
+      "GossipAddress": "127.0.0.1:30008"
+    },
+    {
+      "Address": "127.0.0.1:29009",
+      "PublicKey": "dbbe295efe870c11dff205315fb0560257daa0b95a2908a2973bdff0e2d1430f",
+      "GossipAddress": "127.0.0.1:30009"
+    }
+  ],
+  "MinBlockTXs": 3,
+  "BlockMaxWaitMS": 2000,
+  "BaseTimeoutMS": 2000,
+  "MaxBlockTXs": 128,
+  "MaxBlockBytes": 4177920,
+  "MempoolTTLMS": 60000,
+  "AccountSlots": 16,
+  "AccountQueue": 64,
+  "GlobalSlots": 1024,
+  "GlobalQueue": 256
+}

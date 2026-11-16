@@ -1,8 +1,0 @@
-{
-  "NodeID": 8,
-  "NetworkFile": "network.json",
-  "OutputDir": "../../local-runs/template/node-08",
-  "Behavior": "honest",
-  "AdminAddress": "127.0.0.1:31008",
-  "SendGapMS": 1
-}

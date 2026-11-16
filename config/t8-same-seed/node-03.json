@@ -3,7 +3,7 @@
   "NetworkFile": "network.json",
   "OutputDir": "../../local-runs/t8-same-seed/node-03",
   "Behavior": "honest",
-  "AdminAddress": "127.0.0.1:31003",
+  "AdminAddress": "0.0.0.0:31003",
   "SendGapMS": 1,
   "Trace": true,
   "Faults": {

@@ -3,7 +3,7 @@
   "NetworkFile": "network.json",
   "OutputDir": "../../local-runs/t6b-crashed-proposer/node-04",
   "Behavior": "honest",
-  "AdminAddress": "127.0.0.1:31004",
+  "AdminAddress": "0.0.0.0:31004",
   "SendGapMS": 1,
   "Trace": true
 }
