@@ -188,8 +188,9 @@ func (c Config) Validate() error {
 		seenKey[string(key)] = true
 	}
 	host, port, err := net.SplitHostPort(c.AdminAddress)
-	if err != nil || port == "" || net.ParseIP(host) == nil || !(net.ParseIP(host).IsLoopback() || net.ParseIP(host).IsUnspecified()) || (port != "0" && seenAddr[c.AdminAddress]) {
-		return fmt.Errorf("admin address must be a distinct loopback or 0.0.0.0 endpoint")
+	adminIP := net.ParseIP(host)
+	if err != nil || port == "" || adminIP == nil || !(adminIP.IsLoopback() || adminIP.IsUnspecified() || adminIP.IsPrivate()) || (port != "0" && seenAddr[c.AdminAddress]) {
+		return fmt.Errorf("admin address must be a distinct loopback, private LAN, or unspecified endpoint")
 	}
 	return c.Faults.Validate()
 }
