@@ -67,6 +67,33 @@ Mở `http://localhost:8080/`, rồi nhập URL của node muốn tương tác v
 **Node URL**, ví dụ `http://127.0.0.1:31009`. URL được nhớ trong browser và có
 thể đổi sang node khác bất cứ lúc nào.
 
+### Deploy client lên Vercel
+
+`client/` là static web, không có build step. Deploy bằng Vercel CLI:
+
+```text
+vercel --cwd client
+vercel --cwd client --prod
+```
+
+Nếu kết nối Git trong Vercel Dashboard, đặt **Root Directory** là `client`,
+Framework Preset là **Other** và để Build Command trống.
+
+Để máy khác trong LAN truy cập JSON-RPC, đặt node tương ứng bind mọi network
+interface, ví dụ trong `node-00.json`:
+
+```json
+"AdminAddress": "0.0.0.0:31000"
+```
+
+Trong web client phải nhập IP LAN thật, ví dụ `http://192.168.1.66:31000`,
+không nhập `0.0.0.0`. Cho phép port đó qua Windows Firewall ở profile Private.
+Trang Vercel chạy HTTPS nên browser sẽ hỏi quyền **Local Network**; cần cho phép
+để gọi node HTTP trong LAN. Firefox Desktop 153+ hỗ trợ quyền này mặc định;
+Chrome/Edge mới cũng hỗ trợ. Client tự khai báo address space cho request
+loopback/private-LAN. Browser cũ không hỗ trợ Local Network Access sẽ cần HTTPS
+reverse proxy/tunnel trước node.
+
 Người dùng chỉ nhập `Key` và `Value`. Browser tự tạo ví Ed25519 test-only, thêm
 owner, lấy nonce, ký transaction và gửi JSON-RPC. Private key không rời browser.
 

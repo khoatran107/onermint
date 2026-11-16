@@ -82,17 +82,33 @@ function loadNodeUrl() {
   document.querySelector("#nodeUrl").value = saved || defaultNodeUrl;
 }
 
+function targetAddressSpace(rawURL) {
+  const url = new URL(rawURL);
+  const host = url.hostname.toLowerCase().replace(/^\[|\]$/g, "");
+  if (host === "localhost" || host === "::1" || /^127\./.test(host)) return "loopback";
+  if (/^10\./.test(host) || /^192\.168\./.test(host) || /^169\.254\./.test(host)
+      || /^172\.(1[6-9]|2\d|3[01])\./.test(host) || host.endsWith(".local")
+      || /^(fc|fd|fe8|fe9|fea|feb)/.test(host)) return "local";
+  return null;
+}
+
 let requestID = 0;
 async function rpc(method, params = {}) {
   const url = rpcURL();
   let response;
   try {
-    response = await fetch(url, {
+    const options = {
       method: "POST", headers: {"Content-Type": "application/json"},
       body: JSON.stringify({jsonrpc: "2.0", id: ++requestID, method, params}),
-    });
+    };
+    const addressSpace = targetAddressSpace(url);
+    if (addressSpace) options.targetAddressSpace = addressSpace;
+    response = await fetch(url, options);
   } catch {
-    throw new Error(`Không kết nối được tới ${url}. Kiểm tra node đang chạy và URL đúng.`);
+    const permission = location.protocol === "https:" && url.startsWith("http:")
+      ? " Hãy cho phép quyền truy cập Local Network khi browser hỏi."
+      : "";
+    throw new Error(`Không kết nối được tới ${url}. Kiểm tra node, URL và Windows Firewall.${permission}`);
   }
   if (!response.ok) throw new Error(`HTTP ${response.status}`);
   const body = await response.json();
@@ -140,7 +156,7 @@ async function statusText() {
   ].join("\n");
 }
 
-if (typeof module !== "undefined") module.exports = {canonicalTxBytes, bytesToHex};
+if (typeof module !== "undefined") module.exports = {canonicalTxBytes, bytesToHex, targetAddressSpace};
 
 if (typeof document !== "undefined") {
   loadNodeUrl();
