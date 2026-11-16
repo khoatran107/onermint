@@ -19,24 +19,24 @@ type Peer struct {
 	GossipAddress string
 }
 type Config struct {
-	ChainID                                                                         string
-	NodeID, F                                                                       int
-	Peers                                                                           []Peer
-	PrivateKeyFile, OutputDir                                                       string
-	BaseTimeoutMS, RetryMS, RunForMS, BlockMaxWaitMS                                uint64
-	TargetHeights                                                                   uint64
-	SendGapMS                                                                       uint64
-	QueueLimit, ReceiveLimit                                                        int
-	ReceiveWindowMS, BlockMS                                                        uint64
-	Faults                                                                          Policy
-	NetworkFile                                                                     string `json:",omitempty"`
-	AdminAddress                                                                    string `json:",omitempty"`
-	Behavior                                                                        string `json:",omitempty"`
-	Trace                                                                           bool   `json:",omitempty"`
-	ConsoleLog                                                                      bool   `json:",omitempty"`
-	Recover                                                                         bool   `json:",omitempty"` // Full sync from the existing ledger.db instead of requiring a fresh run directory.
-	MempoolLimit, MempoolBytes, MaxTxBytes, MinBlockTXs, MaxBlockTXs, MaxBlockBytes int
-	StartAtUnixMS                                                                   int64 // Optional common real-clock start for controlled experiments.
+	ChainID                                                                                                                 string
+	NodeID, F                                                                                                               int
+	Peers                                                                                                                   []Peer
+	PrivateKeyFile, OutputDir                                                                                               string
+	BaseTimeoutMS, RetryMS, RunForMS, BlockMaxWaitMS, MempoolTTLMS                                                          uint64
+	TargetHeights                                                                                                           uint64
+	SendGapMS                                                                                                               uint64
+	QueueLimit, ReceiveLimit                                                                                                int
+	ReceiveWindowMS, BlockMS                                                                                                uint64
+	Faults                                                                                                                  Policy
+	NetworkFile                                                                                                             string `json:",omitempty"`
+	AdminAddress                                                                                                            string `json:",omitempty"`
+	Behavior                                                                                                                string `json:",omitempty"`
+	Trace                                                                                                                   bool   `json:",omitempty"`
+	ConsoleLog                                                                                                              bool   `json:",omitempty"`
+	Recover                                                                                                                 bool   `json:",omitempty"` // Full sync from the existing ledger.db instead of requiring a fresh run directory.
+	MempoolBytes, MaxTxBytes, AccountSlots, AccountQueue, GlobalSlots, GlobalQueue, MinBlockTXs, MaxBlockTXs, MaxBlockBytes int
+	StartAtUnixMS                                                                                                           int64 // Optional common real-clock start for controlled experiments.
 }
 
 func LoadConfig(path string) (Config, error) {
@@ -67,6 +67,11 @@ func LoadConfig(path string) (Config, error) {
 			BaseTimeoutMS  uint64
 			MaxBlockTXs    int
 			MaxBlockBytes  int
+			MempoolTTLMS   uint64
+			AccountSlots   int
+			AccountQueue   int
+			GlobalSlots    int
+			GlobalQueue    int
 		}
 		if err = json.Unmarshal(raw, &shared); err != nil {
 			return c, err
@@ -74,6 +79,9 @@ func LoadConfig(path string) (Config, error) {
 		c.ChainID, c.F, c.Peers = shared.ChainID, shared.F, shared.Peers
 		c.MinBlockTXs, c.BlockMaxWaitMS = shared.MinBlockTXs, shared.BlockMaxWaitMS
 		c.BaseTimeoutMS, c.MaxBlockTXs, c.MaxBlockBytes = shared.BaseTimeoutMS, shared.MaxBlockTXs, shared.MaxBlockBytes
+		c.MempoolTTLMS = shared.MempoolTTLMS
+		c.AccountSlots, c.AccountQueue = shared.AccountSlots, shared.AccountQueue
+		c.GlobalSlots, c.GlobalQueue = shared.GlobalSlots, shared.GlobalQueue
 	}
 	c.Defaults()
 	if !filepath.IsAbs(c.PrivateKeyFile) {
@@ -121,9 +129,6 @@ func (c *Config) Defaults() {
 	if c.BlockMS == 0 {
 		c.BlockMS = 500
 	}
-	if c.MempoolLimit == 0 {
-		c.MempoolLimit = 4096
-	}
 	if c.MempoolBytes == 0 {
 		c.MempoolBytes = 8 << 20
 	}
@@ -155,13 +160,13 @@ func (c Config) Validate() error {
 	if len(c.Peers) < 8 || (len(c.Peers)-1)%3 != 0 || c.F != (len(c.Peers)-1)/3 || c.NodeID < 0 || c.NodeID >= len(c.Peers) {
 		return fmt.Errorf("require n>=8, n=3f+1 and valid node ID")
 	}
-	if c.ChainID == "" || c.PrivateKeyFile == "" || c.OutputDir == "" || c.TargetHeights == 0 || c.BaseTimeoutMS == 0 || c.RetryMS == 0 || c.SendGapMS == 0 || c.QueueLimit < 1 || c.ReceiveLimit < 1 || c.ReceiveWindowMS == 0 || c.BlockMS == 0 {
+	if c.ChainID == "" || c.PrivateKeyFile == "" || c.OutputDir == "" || c.TargetHeights == 0 || c.BaseTimeoutMS == 0 || c.RetryMS == 0 || c.MempoolTTLMS == 0 || c.SendGapMS == 0 || c.QueueLimit < 1 || c.ReceiveLimit < 1 || c.ReceiveWindowMS == 0 || c.BlockMS == 0 {
 		return fmt.Errorf("missing node settings")
 	}
-	if c.MaxTxBytes < 1 || c.MaxTxBytes > 1<<20 || c.MempoolLimit < 1 || c.MempoolBytes < c.MaxTxBytes || c.MinBlockTXs < 1 || c.MinBlockTXs > c.MaxBlockTXs || c.MaxBlockTXs < 1 || c.MaxBlockBytes < c.MaxTxBytes || c.MaxBlockBytes > (4<<20)-(16<<10) {
+	if c.MaxTxBytes < 1 || c.MaxTxBytes > 1<<20 || c.MempoolBytes < c.MaxTxBytes || c.AccountSlots < 1 || c.AccountQueue < 1 || c.GlobalSlots < c.AccountSlots || c.GlobalQueue < c.AccountQueue || c.MinBlockTXs < 1 || c.MinBlockTXs > c.MaxBlockTXs || c.MaxBlockTXs < 1 || c.MaxBlockBytes < c.MaxTxBytes || c.MaxBlockBytes > (4<<20)-(16<<10) {
 		return fmt.Errorf("invalid mempool/block capacity")
 	}
-	for _, ms := range []uint64{c.BaseTimeoutMS, c.RetryMS, c.RunForMS, c.BlockMaxWaitMS, c.SendGapMS, c.ReceiveWindowMS, c.BlockMS} {
+	for _, ms := range []uint64{c.BaseTimeoutMS, c.RetryMS, c.RunForMS, c.BlockMaxWaitMS, c.MempoolTTLMS, c.SendGapMS, c.ReceiveWindowMS, c.BlockMS} {
 		if ms > uint64((24*time.Hour)/time.Millisecond) {
 			return fmt.Errorf("duration exceeds one-day lab limit")
 		}

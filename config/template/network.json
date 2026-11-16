@@ -57,5 +57,10 @@
   "BlockMaxWaitMS": 2000,
   "BaseTimeoutMS": 2000,
   "MaxBlockTXs": 128,
-  "MaxBlockBytes": 4177920
+  "MaxBlockBytes": 4177920,
+  "MempoolTTLMS": 60000,
+  "AccountSlots": 16,
+  "AccountQueue": 64,
+  "GlobalSlots": 1024,
+  "GlobalQueue": 256
 }

@@ -13,7 +13,7 @@ func TestGeneratedPortRangesDoNotDependOnNodeCount(t *testing.T) {
 		count := 3*faultTolerance + 1
 		t.Run(fmt.Sprintf("f=%d_n=%d", faultTolerance, count), func(t *testing.T) {
 			dir := filepath.Join(t.TempDir(), "config")
-			if err := Generate(dir, "../../local-runs/test", faultTolerance, 29000, 0, Policy{}); err != nil {
+			if err := Generate(dir, "../../local-runs/test", faultTolerance, 29000, 0, Policy{}, MempoolSettings{TTLMS: 60_000, AccountSlots: 16, AccountQueue: 64, GlobalSlots: 1024, GlobalQueue: 256}); err != nil {
 				t.Fatal(err)
 			}
 			seen := make(map[int]bool)
@@ -22,8 +22,8 @@ func TestGeneratedPortRangesDoNotDependOnNodeCount(t *testing.T) {
 				if err != nil {
 					t.Fatal(err)
 				}
-				if cfg.MinBlockTXs != 3 || cfg.BlockMaxWaitMS != 2000 {
-					t.Fatalf("batch defaults = %d/%d, want 3/2000", cfg.MinBlockTXs, cfg.BlockMaxWaitMS)
+				if cfg.MinBlockTXs != 3 || cfg.BlockMaxWaitMS != 2000 || cfg.MempoolTTLMS != 60_000 || cfg.AccountSlots != 16 || cfg.AccountQueue != 64 || cfg.GlobalSlots != 1024 || cfg.GlobalQueue != 256 {
+					t.Fatalf("generated network defaults are incorrect")
 				}
 				for address, want := range map[string]int{
 					cfg.Peers[i].Address:       29000 + i,
@@ -43,7 +43,7 @@ func TestGeneratedPortRangesDoNotDependOnNodeCount(t *testing.T) {
 }
 
 func TestGenerateRejectsClusterLargerThanPortRange(t *testing.T) {
-	if err := Generate(filepath.Join(t.TempDir(), "config"), "output", 334, 29000, 0, Policy{}); err == nil {
+	if err := Generate(filepath.Join(t.TempDir(), "config"), "output", 334, 29000, 0, Policy{}, MempoolSettings{TTLMS: 60_000, AccountSlots: 16, AccountQueue: 64, GlobalSlots: 1024, GlobalQueue: 256}); err == nil {
 		t.Fatal("accepted validator count larger than reserved port range")
 	}
 }

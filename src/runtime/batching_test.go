@@ -99,6 +99,40 @@ func TestRuntimeWaitsForThresholdOrMaximumDelay(t *testing.T) {
 	}
 }
 
+func TestMempoolTTLEvictsPendingTransaction(t *testing.T) {
+	node, port, sender := newBatchRuntime(t)
+	tx, err := crypt.SignTransaction(types.Transaction{
+		ChainID: "batch-test", Sender: types.PublicKey(sender[32:]),
+		TargetKey: hex.EncodeToString(sender[32:]) + "/message",
+		Value:     []byte("expires"), Nonce: 1,
+	}, sender)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err = node.Submit(tx); err != nil {
+		t.Fatal(err)
+	}
+	if node.pool.Len() != 1 {
+		t.Fatal("transaction did not enter mempool")
+	}
+	var expire func() error
+	for _, scheduled := range port.scheduled {
+		if scheduled.delay == 1_234 {
+			expire = scheduled.call
+			break
+		}
+	}
+	if expire == nil {
+		t.Fatal("TTL eviction was not scheduled")
+	}
+	if err = expire(); err != nil {
+		t.Fatal(err)
+	}
+	if node.pool.Len() != 0 {
+		t.Fatal("expired transaction remained in mempool")
+	}
+}
+
 func newBatchRuntime(t *testing.T) (*Runtime, *batchTestPort, ed25519.PrivateKey) {
 	t.Helper()
 	validators := make([]types.ValidatorID, 10)
@@ -116,7 +150,9 @@ func newBatchRuntime(t *testing.T) (*Runtime, *batchTestPort, ed25519.PrivateKey
 	node, err := New(Config{
 		ID: 0, ChainID: "batch-test", F: 3, Validators: validators, PrivateKey: keys[0],
 		BaseTimeout: 100, RetryInterval: 50, TargetHeights: 1, BlockMaxWait: 777,
-		Store: store, MempoolLimit: 20, MempoolBytes: 1 << 20, MaxTxBytes: 1 << 16,
+		MempoolTTL: 1_234,
+		Store:      store, MempoolBytes: 1 << 20, MaxTxBytes: 1 << 16,
+		AccountSlots: 16, AccountQueue: 64, GlobalSlots: 1024, GlobalQueue: 256,
 		MinBlockTXs: 3, MaxBlockTXs: 10, MaxBlockBytes: 1 << 20,
 	}, port)
 	if err != nil {

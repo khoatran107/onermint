@@ -15,7 +15,7 @@ from urllib.request import urlopen
 
 REPO = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(REPO / "tests"))
-import run_local_cluster as launcher  # noqa: E402
+import run as launcher  # noqa: E402
 
 FAILED = []
 
@@ -51,7 +51,7 @@ class Cluster:
             shutil.rmtree(self.output)  # Only this scenario's own scratch output.
 
     def _create(self, network, nodes):
-        subprocess.run([sys.executable, str(REPO / "tests" / "run_local_cluster.py"),
+        subprocess.run([sys.executable, str(REPO / "tests" / "run.py"),
                         "--init", self.name, "--f", "3", "--go", self.go], cwd=REPO, check=True)
         shared = self.directory / "network.json"
         data = json.loads(shared.read_text(encoding="utf-8"))

@@ -38,4 +38,3 @@ Lab01.pdf
 # Generated local clusters contain private keys and runtime output.
 /local-runs/
 __pycache__/
-key-*.hex

@@ -256,8 +256,8 @@ func TestLiveAdminInspection(t *testing.T) {
 		if readErr != nil || response.StatusCode != http.StatusOK || len(data) == 0 {
 			t.Fatalf("%s unavailable: status=%d error=%v", path, response.StatusCode, readErr)
 		}
-		if path == "/metrics" && !bytes.Contains(data, []byte("lab01_mempool_transactions")) {
-			t.Fatal("metrics response lacks mempool metric")
+		if path == "/metrics" && (!bytes.Contains(data, []byte("lab01_mempool_transactions")) || !bytes.Contains(data, []byte("lab01_consensus_height")) || !bytes.Contains(data, []byte("lab01_config_min_block_transactions"))) {
+			t.Fatal("metrics response lacks required node metrics")
 		}
 	}
 	request, err := http.NewRequest(http.MethodPost, "http://"+adminAddress+"/mempool", nil)

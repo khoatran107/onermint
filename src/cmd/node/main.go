@@ -25,6 +25,11 @@ func main() {
 	faultTolerance := flag.Int("f", 3, "Byzantine fault tolerance; validator count is 3F+1")
 	port := flag.Int("base-port", 29000, "first loopback port for init")
 	duration := flag.Uint64("run-ms", 0, "run duration; zero runs until Ctrl+C")
+	mempoolTTL := flag.Uint64("mempool-ttl-ms", 0, "transaction TTL written to network.json")
+	accountSlots := flag.Int("account-slots", 0, "reserved transaction slots per account")
+	accountQueue := flag.Int("account-queue", 0, "queued transactions allowed per account")
+	globalSlots := flag.Int("global-slots", 0, "global transaction slots")
+	globalQueue := flag.Int("global-queue", 0, "global queued transactions")
 	submit := flag.String("submit", "", "submit this value as a signed transaction using the node's configured key")
 	record := flag.String("record", "message", "owned record name")
 	nonce := flag.Uint64("nonce", 0, "next sender nonce, starting at 1")
@@ -45,7 +50,7 @@ func main() {
 		if *exampleFaults {
 			policy = realnet.Policy{Seed: 1, MinDelayMS: 2, MaxDelayMS: 30, DropBPS: 1000, DuplicateBPS: 1500, ReorderEvery: 7, ReorderHoldMS: 60, ReplayEvery: 5, ReplayAgeMS: 300, DisableAfterMS: 3000}
 		}
-		err = realnet.Generate(*initDir, *initOutput, *faultTolerance, *port, *duration, policy)
+		err = realnet.Generate(*initDir, *initOutput, *faultTolerance, *port, *duration, policy, realnet.MempoolSettings{TTLMS: *mempoolTTL, AccountSlots: *accountSlots, AccountQueue: *accountQueue, GlobalSlots: *globalSlots, GlobalQueue: *globalQueue})
 	} else if *config != "" {
 		var c realnet.Config
 		c, err = realnet.LoadConfig(*config)

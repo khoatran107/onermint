@@ -1,7 +1,6 @@
-"""Build, configure and run real Go nodes. Python 3.9+, standard library only."""
+"""Create validator configs or run all/one real Go node. Python 3.9+."""
 
 import argparse
-from collections import Counter
 import json
 import os
 from pathlib import Path
@@ -12,6 +11,11 @@ import time
 
 
 DEFAULT_F = 3
+DEFAULT_MEMPOOL_TTL_MS = 60_000
+DEFAULT_ACCOUNT_SLOTS = 16
+DEFAULT_ACCOUNT_QUEUE = 64
+DEFAULT_GLOBAL_SLOTS = 1024
+DEFAULT_GLOBAL_QUEUE = 256
 
 REPO = Path(__file__).resolve().parent.parent
 
@@ -29,7 +33,16 @@ def build_node(go):
     return binary
 
 
-def prepare_cluster(go, name, fault_tolerance):
+def binary_is_stale(binary):
+    if not binary.is_file():
+        return True
+    inputs = [REPO / "go.mod", REPO / "go.sum"]
+    inputs.extend(path for path in (REPO / "src").rglob("*") if path.is_file())
+    return any(path.stat().st_mtime > binary.stat().st_mtime for path in inputs)
+
+
+def prepare_cluster(go, name, fault_tolerance, mempool_ttl_ms, account_slots,
+                    account_queue, global_slots, global_queue):
     if fault_tolerance < 3:
         raise ValueError("F must be at least 3 for this lab; N is always 3F + 1.")
     if not name or Path(name).name != name:
@@ -42,7 +55,12 @@ def prepare_cluster(go, name, fault_tolerance):
     relative_output = os.path.relpath(output, directory)
     command = [go, "run", "-buildvcs=false", "./src/cmd/node",
                "-init-dir", str(directory), "-f", str(fault_tolerance),
-               "-init-output-dir", relative_output]
+               "-init-output-dir", relative_output,
+               "-mempool-ttl-ms", str(mempool_ttl_ms),
+               "-account-slots", str(account_slots),
+               "-account-queue", str(account_queue),
+               "-global-slots", str(global_slots),
+               "-global-queue", str(global_queue)]
     subprocess.run(command, cwd=REPO, check=True)
     return directory
 
@@ -97,14 +115,11 @@ def require_fresh_output(configs):
 
 
 def run_one_node(binary, path, expected_crash=False):
-    """Keep this real Go node attached to the user's current terminal."""
     process = subprocess.Popen([str(binary), "-config", str(path)], cwd=REPO)
     try:
         try:
             code = process.wait()
         except KeyboardInterrupt:
-            # The attached Go process also receives terminal Ctrl+C. Let it
-            # save its result before falling back to forced cleanup.
             try:
                 process.wait(timeout=5)
             except subprocess.TimeoutExpired:
@@ -143,40 +158,6 @@ def stop_processes(processes, graceful_seconds=0):
         process.wait()
 
 
-def verify_results(configs, binary):
-    expected_headers = None
-    expected_root = None
-    pids = set()
-    counts = Counter()
-    for path, config, output in configs:
-        if config["Behavior"] != "honest":
-            print(f"Node {config['NodeID']:2}: behavior={config['Behavior']} (excluded from honest agreement checks)")
-            continue
-        result = json.loads((output / "result.json").read_text(encoding="utf-8"))
-        inspected = subprocess.run([str(binary), "-config", str(path), "-inspect"],
-                                   capture_output=True, text=True, check=True, encoding="utf-8")
-        ledger = json.loads(inspected.stdout) or []
-        if (result["NodeID"] != config["NodeID"] or result["PID"] in pids
-                or len(ledger) != result["Height"]):
-            raise ValueError(f"Incomplete or invalid result for {path.name}")
-        pids.add(result["PID"])
-        headers = [entry["Block"]["Header"] for entry in ledger]
-        if expected_headers is None:
-            expected_headers, expected_root = headers, result["StateRoot"]
-        elif headers != expected_headers or result["StateRoot"] != expected_root:
-            raise ValueError(f"Nodes disagree at {path.name}")
-        print(f"Node {result['NodeID']:2}: PID {result['PID']:6}, blocks {len(ledger)}")
-        with (output / "events.jsonl").open(encoding="utf-8") as log:
-            for line in log:
-                counts[json.loads(line)["Event"]] += 1
-    print(f"Matching state root: {expected_root}")
-    for name in ("fault_drop", "fault_duplicate", "fault_reorder", "fault_replay",
-                 "send_error", "block", "unblock"):
-        if counts[name]:
-            print(f"  {name}: {counts[name]}")
-    print("On-disk honest histories and roots agree. Go tests additionally verify execution and quorum signatures.")
-
-
 def run_cluster(binary, configs):
     directory = configs[0][2].parent
     if any(output.parent != directory for _, _, output in configs):
@@ -204,7 +185,6 @@ def run_cluster(binary, configs):
                 raise RuntimeError(f"Cluster exceeded its shutdown deadline; inspect events.jsonl in {directory}.")
             if pending:
                 time.sleep(0.1)  # Keeps Ctrl+C responsive on Windows.
-        verify_results(configs, binary)
     except KeyboardInterrupt:
         interrupted = True
         print("Stopping all validator processes...", file=sys.stderr, flush=True)
@@ -217,79 +197,68 @@ def run_cluster(binary, configs):
 
 def main():
     if len(sys.argv) == 1:
-        print("Create config: python tests/run_local_cluster.py --init demo --f 3")
-        print("Run network:   python tests/run_local_cluster.py --config-dir config/demo")
-        print("More options:  python tests/run_local_cluster.py --help")
+        print("Create config: python tests/run.py --init demo --f 3")
+        print("Run network:   python tests/run.py --config-dir config/demo")
+        print("Run one node:  python tests/run.py --config-dir config/demo --node 0")
+        print("More options:  python tests/run.py --help")
         return
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--go", default="go", help="Go executable path")
     parser.add_argument("--f", type=int, default=DEFAULT_F,
                         help="init only: Byzantine tolerance; validator count N is 3F+1")
+    parser.add_argument("--mempool-ttl-ms", type=int, default=DEFAULT_MEMPOOL_TTL_MS,
+                        help="init only: transaction TTL (default: 60000)")
+    parser.add_argument("--account-slots", type=int, default=DEFAULT_ACCOUNT_SLOTS,
+                        help="init only: protected slots per account (default: 16)")
+    parser.add_argument("--account-queue", type=int, default=DEFAULT_ACCOUNT_QUEUE,
+                        help="init only: extra queue per account (default: 64)")
+    parser.add_argument("--global-slots", type=int, default=DEFAULT_GLOBAL_SLOTS,
+                        help="init only: total transaction slots (default: 1024)")
+    parser.add_argument("--global-queue", type=int, default=DEFAULT_GLOBAL_QUEUE,
+                        help="init only: total extra queue (default: 256)")
     group = parser.add_mutually_exclusive_group(required=True)
     group.add_argument("--init", help="Create config/<name>, then exit")
     group.add_argument("--config-dir", type=Path, help="Start existing, edited configs without regenerating")
-    parser.add_argument("--submit", help="Submit this value to --node using its signing key")
-    parser.add_argument("--nonce", type=int, default=1)
-    parser.add_argument("--record", default="message")
-    parser.add_argument("--via", type=int, help="Submit through another live node")
-    parser.add_argument("--inspect", action="store_true", help="Read --node's LevelDB after it stops")
-    actions = parser.add_mutually_exclusive_group()
-    actions.add_argument("--node", type=int, help="Run only this node in the current terminal; requires --config-dir")
-    actions.add_argument("--check-only", action="store_true", help="Check saved results without building or starting nodes; requires --config-dir")
+    parser.add_argument("--node", type=int, help="Run only this node in the current terminal")
     args = parser.parse_args()
     if os.name == "nt" and hasattr(signal, "SIGBREAK"):
         signal.signal(signal.SIGBREAK, handle_interrupt)
-    if args.submit is not None and args.inspect:
-        parser.error("Choose --submit or --inspect")
-    init_forbidden = {"--submit", "--nonce", "--record", "--via", "--inspect", "--node", "--check-only"}
     supplied_options = {argument.split("=", 1)[0] for argument in sys.argv[1:] if argument.startswith("--")}
-    if args.init and init_forbidden.intersection(supplied_options):
-        parser.error("--init only accepts --f (and optional --go)")
+    if args.init and args.node is not None:
+        parser.error("--node requires --config-dir")
     if args.config_dir and "--f" in supplied_options:
         parser.error("--f is only valid with --init; running uses F from network.json")
-    if (args.node is not None or args.check_only) and not args.config_dir:
-        parser.error("--node/--check-only require --config-dir")
+    mempool_options = {"--mempool-ttl-ms", "--account-slots", "--account-queue",
+                       "--global-slots", "--global-queue"}
+    if args.config_dir and mempool_options.intersection(supplied_options):
+        parser.error("Mempool flags are only valid with --init; running loads network.json")
     if args.init:
-        directory = prepare_cluster(args.go, args.init, args.f)
+        directory = prepare_cluster(args.go, args.init, args.f, args.mempool_ttl_ms,
+                                    args.account_slots, args.account_queue,
+                                    args.global_slots, args.global_queue)
         configs = load_configs(directory)
         print(f"Created {len(configs)} validator configs in: {directory}")
         print("Edit the JSON files, then run:")
-        print(f'python tests/run_local_cluster.py --config-dir "{directory}"')
+        print(f'python tests/run.py --config-dir "{directory}"')
         return
 
     directory = args.config_dir.resolve()
-    binary = REPO / "local-runs" / ("node.exe" if os.name == "nt" else "node")
     configs = load_configs(directory)
     print(f"Config directory: {directory}", flush=True)
-    print(f"Runtime directory: {configs[0][2].parent}", flush=True)
-    if args.check_only:
-        verify_results(configs, binary)
-    elif args.submit is not None or args.inspect:
-        if args.node is None:
-            raise ValueError("--submit/--inspect require --config-dir and --node")
-        selected = [entry for entry in configs if entry[1]["NodeID"] == args.node]
-        if not selected:
-            raise ValueError("Unknown node")
-        command = [str(binary), "-config", str(selected[0][0])]
-        if args.inspect:
-            command.append("-inspect")
-        else:
-            command += ["-submit", args.submit, "-nonce", str(args.nonce), "-record", args.record]
-            if args.via is not None:
-                command += ["-via", str(args.via)]
-        subprocess.run(command, cwd=REPO, check=True)
-    elif args.node is not None:
+    binary = REPO / "local-runs" / ("node.exe" if os.name == "nt" else "node")
+    if args.node is not None:
         selected = [entry for entry in configs if entry[1]["NodeID"] == args.node]
         if not selected:
             raise ValueError(f"Unknown node ID: {args.node}")
+        print(f"Runtime directory: {selected[0][2].parent}", flush=True)
         require_fresh_output(selected)
-        if not binary.exists():
+        if binary_is_stale(binary):
             binary = build_node(args.go)
         run_one_node(binary, selected[0][0], selected[0][1]["Behavior"] == "crashed_proposer")
-    else:
-        require_fresh_output(configs)
-        binary = build_node(args.go)
-        run_cluster(binary, configs)
+        return
+    print(f"Runtime directory: {configs[0][2].parent}", flush=True)
+    require_fresh_output(configs)
+    run_cluster(build_node(args.go), configs)
 
 
 if __name__ == "__main__":

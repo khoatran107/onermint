@@ -17,17 +17,20 @@ type entry struct {
 	size int
 }
 
-// Bound future nonce gaps as well as total pool count/bytes.
+// Bound future nonce gaps independently of the configured pool quotas.
 const maxFutureNonceGap = 1024
 
 // Pool is owned by the node event loop; callers must not mutate it concurrently.
 type Pool struct {
-	entries                         map[types.Hash]entry
-	used, maxCount, maxBytes, maxTX int
+	entries                                              map[types.Hash]entry
+	accountCount                                         map[types.PublicKey]int
+	used, slots, queued                                  int
+	globalSlots, globalQueue, accountSlots, accountQueue int
+	maxBytes, maxTX                                      int
 }
 
-func New(count, bytesLimit, txLimit int) *Pool {
-	return &Pool{entries: make(map[types.Hash]entry), maxCount: count, maxBytes: bytesLimit, maxTX: txLimit}
+func New(globalSlots, globalQueue, accountSlots, accountQueue, bytesLimit, txLimit int) *Pool {
+	return &Pool{entries: make(map[types.Hash]entry), accountCount: make(map[types.PublicKey]int), globalSlots: globalSlots, globalQueue: globalQueue, accountSlots: accountSlots, accountQueue: accountQueue, maxBytes: bytesLimit, maxTX: txLimit}
 }
 func (p *Pool) Len() int { return len(p.entries) }
 func (p *Pool) Admit(chain string, s state.State, tx types.Transaction) (types.Hash, error) {
@@ -58,12 +61,31 @@ func (p *Pool) Admit(chain string, s state.State, tx types.Transaction) (types.H
 	if err != nil {
 		return id, err
 	}
-	if len(b) > p.maxTX || len(p.entries) >= p.maxCount || p.used+len(b) > p.maxBytes {
+	accountPending := p.accountCount[tx.Sender]
+	if accountPending < p.accountSlots {
+		if p.slots >= p.globalSlots {
+			return id, fmt.Errorf("global transaction slots exhausted")
+		}
+	} else {
+		if accountPending-p.accountSlots >= p.accountQueue {
+			return id, fmt.Errorf("account transaction queue exhausted")
+		}
+		if p.queued >= p.globalQueue {
+			return id, fmt.Errorf("global transaction queue exhausted")
+		}
+	}
+	if len(b) > p.maxTX || p.used+len(b) > p.maxBytes {
 		return id, fmt.Errorf("mempool capacity exceeded")
 	}
 	tx.Value = append([]byte(nil), tx.Value...)
 	p.entries[id] = entry{tx, len(b)}
 	p.used += len(b)
+	p.accountCount[tx.Sender]++
+	if accountPending < p.accountSlots {
+		p.slots++
+	} else {
+		p.queued++
+	}
 	return id, nil
 }
 func (p *Pool) Select(s state.State, count, byteLimit int) []types.Transaction {
@@ -100,9 +122,33 @@ func (p *Pool) Select(s state.State, count, byteLimit int) []types.Transaction {
 func (p *Pool) Prune(s state.State) {
 	for id, e := range p.entries {
 		if e.tx.Nonce <= s.LastNonce(e.tx.Sender) {
-			delete(p.entries, id)
-			p.used -= e.size
+			p.remove(id, e)
 		}
+	}
+}
+
+// Remove evicts one pending transaction, for example when its TTL expires.
+func (p *Pool) Remove(id types.Hash) bool {
+	e, ok := p.entries[id]
+	if !ok {
+		return false
+	}
+	p.remove(id, e)
+	return true
+}
+
+func (p *Pool) remove(id types.Hash, e entry) {
+	accountPending := p.accountCount[e.tx.Sender]
+	delete(p.entries, id)
+	p.used -= e.size
+	if accountPending <= p.accountSlots {
+		p.slots--
+	} else {
+		p.queued--
+	}
+	p.accountCount[e.tx.Sender]--
+	if p.accountCount[e.tx.Sender] == 0 {
+		delete(p.accountCount, e.tx.Sender)
 	}
 }
 

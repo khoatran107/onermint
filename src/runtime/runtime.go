@@ -25,16 +25,17 @@ type Port interface {
 	Record(network.Event)
 }
 type Config struct {
-	ID                                                                              int
-	ChainID                                                                         string
-	F                                                                               int
-	Validators                                                                      []types.ValidatorID
-	PrivateKey                                                                      ed25519.PrivateKey
-	BaseTimeout, RetryInterval, TargetHeights, BlockMaxWait                         uint64
-	Store                                                                           *ledger.Store
-	Behavior                                                                        string
-	MempoolLimit, MempoolBytes, MaxTxBytes, MinBlockTXs, MaxBlockTXs, MaxBlockBytes int
-	Recover                                                                         bool // Full sync: replay and verify the local ledger before joining.
+	ID                                                                                                                      int
+	ChainID                                                                                                                 string
+	F                                                                                                                       int
+	Validators                                                                                                              []types.ValidatorID
+	PrivateKey                                                                                                              ed25519.PrivateKey
+	BaseTimeout, RetryInterval, TargetHeights, BlockMaxWait                                                                 uint64
+	MempoolTTL                                                                                                              uint64
+	Store                                                                                                                   *ledger.Store
+	Behavior                                                                                                                string
+	MempoolBytes, MaxTxBytes, AccountSlots, AccountQueue, GlobalSlots, GlobalQueue, MinBlockTXs, MaxBlockTXs, MaxBlockBytes int
+	Recover                                                                                                                 bool // Full sync: replay and verify the local ledger before joining.
 }
 type wireHeader struct {
 	Proposal *cons.Proposal  `json:",omitempty"`
@@ -74,6 +75,7 @@ type Runtime struct {
 	maxBlockTXs, maxBlockBytes int
 	minBlockTXs                int
 	blockMaxWait               uint64
+	mempoolTTL                 uint64
 	batchEpoch                 uint64
 	batchScheduled, batchReady bool
 	replay                     *types.Transaction
@@ -85,7 +87,7 @@ type Runtime struct {
 }
 
 func New(c Config, port Port) (*Runtime, error) {
-	if port == nil || c.Store == nil || c.ID < 0 || c.ID >= len(c.Validators) || c.TargetHeights == 0 || c.RetryInterval == 0 {
+	if port == nil || c.Store == nil || c.ID < 0 || c.ID >= len(c.Validators) || c.TargetHeights == 0 || c.RetryInterval == 0 || c.MempoolTTL == 0 || c.AccountSlots < 1 || c.AccountQueue < 1 || c.GlobalSlots < c.AccountSlots || c.GlobalQueue < c.AccountQueue {
 		return nil, fmt.Errorf("invalid node configuration")
 	}
 	e, err := cons.New(cons.Config{ChainID: c.ChainID, Validators: c.Validators, F: c.F, PrivateKey: c.PrivateKey, BaseTimeout: c.BaseTimeout, Persist: c.Store.Append})
@@ -106,7 +108,7 @@ func New(c Config, port Port) (*Runtime, error) {
 	if c.BlockMaxWait == 0 {
 		c.BlockMaxWait = c.BaseTimeout
 	}
-	n := &Runtime{port: port, id: c.ID, identity: c.Validators[c.ID], engine: e, chain: c.ChainID, target: c.TargetHeights, retry: c.RetryInterval, attempted: make(map[slot]bool), remote: make(map[remoteKey]wireHeader), store: c.Store, pool: mempool.New(c.MempoolLimit, c.MempoolBytes, c.MaxTxBytes), localTX: make(map[types.Hash]types.Transaction), behavior: c.Behavior, key: append(ed25519.PrivateKey(nil), c.PrivateKey...), minBlockTXs: c.MinBlockTXs, blockMaxWait: c.BlockMaxWait, maxBlockTXs: c.MaxBlockTXs, maxBlockBytes: c.MaxBlockBytes}
+	n := &Runtime{port: port, id: c.ID, identity: c.Validators[c.ID], engine: e, chain: c.ChainID, target: c.TargetHeights, retry: c.RetryInterval, attempted: make(map[slot]bool), remote: make(map[remoteKey]wireHeader), store: c.Store, pool: mempool.New(c.GlobalSlots, c.GlobalQueue, c.AccountSlots, c.AccountQueue, c.MempoolBytes, c.MaxTxBytes), localTX: make(map[types.Hash]types.Transaction), behavior: c.Behavior, key: append(ed25519.PrivateKey(nil), c.PrivateKey...), minBlockTXs: c.MinBlockTXs, blockMaxWait: c.BlockMaxWait, mempoolTTL: c.MempoolTTL, maxBlockTXs: c.MaxBlockTXs, maxBlockBytes: c.MaxBlockBytes}
 	return n, nil
 }
 func (n *Runtime) Start() error {
@@ -516,6 +518,21 @@ func (n *Runtime) admit(tx types.Transaction) error {
 		copyTX := tx
 		copyTX.Value = append([]byte(nil), tx.Value...)
 		n.replay = &copyTX
+	}
+	if err := n.port.Schedule(n.mempoolTTL, func() error {
+		if !n.pool.Remove(id) {
+			return nil
+		}
+		delete(n.localTX, id)
+		n.resetBatchWait()
+		n.port.Record(network.Event{Node: n.id, Peer: -1, Event: "mempool_evict", Ref: id, Reason: fmt.Sprintf("ttl_ms=%d pending=%d", n.mempoolTTL, n.pool.Len())})
+		if err := n.armBatchWait(); err != nil {
+			return err
+		}
+		return n.process()
+	}); err != nil {
+		n.pool.Remove(id)
+		return err
 	}
 	n.port.Record(network.Event{Node: n.id, Peer: -1, Event: "mempool_accept", Ref: id, Reason: fmt.Sprintf("pending=%d nonce=%d", n.pool.Len(), tx.Nonce)})
 	return n.armBatchWait()

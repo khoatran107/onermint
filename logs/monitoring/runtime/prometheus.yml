@@ -4,4 +4,23 @@ scrape_configs:
   - job_name: lab01
     metrics_path: /metrics
     static_configs:
-      - targets: ["host.docker.internal:31000", "host.docker.internal:31001", "host.docker.internal:31002", "host.docker.internal:31003", "host.docker.internal:31004", "host.docker.internal:31005", "host.docker.internal:31006", "host.docker.internal:31007", "host.docker.internal:31008", "host.docker.internal:31009"]
+      - targets: ["host.docker.internal:31000"]
+        labels: { node: "0" }
+      - targets: ["host.docker.internal:31001"]
+        labels: { node: "1" }
+      - targets: ["host.docker.internal:31002"]
+        labels: { node: "2" }
+      - targets: ["host.docker.internal:31003"]
+        labels: { node: "3" }
+      - targets: ["host.docker.internal:31004"]
+        labels: { node: "4" }
+      - targets: ["host.docker.internal:31005"]
+        labels: { node: "5" }
+      - targets: ["host.docker.internal:31006"]
+        labels: { node: "6" }
+      - targets: ["host.docker.internal:31007"]
+        labels: { node: "7" }
+      - targets: ["host.docker.internal:31008"]
+        labels: { node: "8" }
+      - targets: ["host.docker.internal:31009"]
+        labels: { node: "9" }

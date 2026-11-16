@@ -22,7 +22,13 @@ Yêu cầu: Python 3.9+, Go theo `go.mod`; Docker Desktop nếu dùng Grafana.
 Tạo testcase mới. Config nằm trong `config/`, output nằm trong `local-runs/`:
 
 ```text
-python tests/run_local_cluster.py --init template --f 3
+python tests/run.py --init template --f 3
+```
+
+Có thể đổi giới hạn mempool ngay khi khởi tạo, ví dụ:
+
+```text
+python tests/run.py --init custom --f 3 --mempool-ttl-ms 60000 --account-slots 16 --account-queue 64 --global-slots 1024 --global-queue 256
 ```
 
 ```text
@@ -33,17 +39,18 @@ local-runs/template/   LevelDB, log và kết quả runtime
 Chạy toàn bộ mạng:
 
 ```text
-python tests/run_local_cluster.py --config-dir config/template
+python tests/run.py --config-dir config/template
 ```
 
-Hoặc chạy mỗi node trong một terminal riêng:
+Không truyền `--node` thì script khởi động toàn bộ validator set. Để chạy từng
+node trong terminal riêng:
 
 ```text
-python tests/run_local_cluster.py --config-dir config/template --node 0
-python tests/run_local_cluster.py --config-dir config/template --node 1
+python tests/run.py --config-dir config/template --node 0
+python tests/run.py --config-dir config/template --node 1
 ```
 
-Tiếp tục đến node 9. Ba range cách nhau 1000 port nên không đổi khi thay `n`:
+Ba range cách nhau 1000 port nên không đổi khi thay `n`:
 gRPC `29000..`, GossipSub `30000..`, HTTP/UI `31000..`.
 
 ## Gửi transaction
@@ -56,7 +63,7 @@ owner, lấy nonce, ký transaction và gửi JSON-RPC. Private key không rời
 Bulk client dùng cùng JSON-RPC:
 
 ```text
-python tests/send_bulk_transactions.py --config-dir config/template --via 9 --count 20000 --rate 200
+python tests/spam_transactions.py --config-dir config/template --via 9 --count 20000 --delay 0.005
 ```
 
 `--via` phải là honest node. Script chỉ gửi transaction; proposer tự chọn theo
@@ -68,18 +75,33 @@ Khi validator đang chạy:
 
 ```text
 python tests/prepare_monitoring.py --config-dir config/template
-docker-compose -f logs/monitoring/docker-compose.yml up -d
+docker compose -f logs/monitoring/docker-compose.yml up -d
 ```
 
-Mở `http://127.0.0.1:3000`, đăng nhập `admin / lab01`. Dashboard hiển thị
-height, mempool, consensus round/step, fault và log của từng node.
+Validator là process chạy trực tiếp trên máy, không nằm trong container. Script
+đọc port HTTP thật từ `local-runs/<test>/node-*/admin`; Prometheus trong Docker
+truy cập các process đó qua `host.docker.internal`.
+
+Mở `http://127.0.0.1:3000`, đăng nhập `admin / lab01`. Dashboard hiển thị node
+health, finalized-height agreement, mempool, consensus step/round, batch wait,
+timeout/rejection, network fault, outbound queue và log của từng validator.
+
+Nếu đổi testcase khi monitoring đang chạy, sinh lại target rồi restart Prometheus:
 
 ```text
-docker-compose -f logs/monitoring/docker-compose.yml down
+python tests/prepare_monitoring.py --config-dir config/beo
+docker compose -f logs/monitoring/docker-compose.yml restart prometheus
 ```
 
-API debug: `/status`, `/mempool`, `/ledger`, `/metrics`. JSON-RPC nằm tại
-`POST /rpc`.
+Nếu dashboard báo `No data`, kiểm tra `http://127.0.0.1:9090/targets`; các node
+đang chạy phải có trạng thái `UP`.
+
+```text
+docker compose -f logs/monitoring/docker-compose.yml down
+```
+
+API debug trên port HTTP của mỗi node: `/status`, `/mempool`, `/ledger`,
+`/metrics`. JSON-RPC nằm tại `POST /rpc`.
 
 ## Config node
 
@@ -104,18 +126,22 @@ Thông số thường sửa:
 | `SendGapMS` | `1` | Giới hạn outbound |
 | `BaseTimeoutMS` | `2000` | Timeout cơ sở, tăng theo round (trong `network.json`) |
 | `RetryMS` | `400` | Chu kỳ phát lại |
-| `MempoolLimit` | `4096` | Transaction tối đa trong RAM |
 | `MaxBlockTXs` | `128` | Transaction tối đa mỗi block (trong `network.json`) |
 | `MaxBlockBytes` | `4177920` | Kích thước body tối đa (trong `network.json`) |
 | `Trace` | `false` | Log network chi tiết |
 | `ConsoleLog` | `false` | In event log ra terminal |
 
-Hai tham số chung trong `network.json` điều khiển lúc proposer tạo block:
+Các tham số chung sau chỉ được load từ `network.json`:
 
 | Field | Default | Ý nghĩa |
 |---|---:|---|
 | `MinBlockTXs` | `3` | Tạo block ngay khi đủ transaction thực thi được |
 | `BlockMaxWaitMS` | `2000` | Nếu chưa đủ, tạo block sau thời gian chờ tối đa |
+| `MempoolTTLMS` | `60000` | Xóa transaction chưa commit sau 1 phút |
+| `AccountSlots` | `16` | Slot ưu tiên của mỗi account trước khi dùng queue |
+| `AccountQueue` | `64` | Queue bổ sung tối đa của mỗi account |
+| `GlobalSlots` | `1024` | Tổng slot chính của mempool |
+| `GlobalQueue` | `256` | Tổng queue bổ sung dùng chung |
 
 Behavior hỗ trợ: `invalid_signature`, `wrong_domain`, `duplicate_transaction`,
 `replay_transaction`, `silent_proposer`, `crashed_proposer`, `equivocate`
@@ -127,7 +153,7 @@ Network delay/drop/duplicate/reorder/replay nằm trong object `Faults`; xem
 Để tạo testcase khác, chạy lại với tên mới rồi chỉ sửa JSON:
 
 ```text
-python tests/run_local_cluster.py --init delay-test --f 3
+python tests/run.py --init delay-test --f 3
 ```
 
 Không dùng lại `OutputDir` cũ. Xóa `local-runs/<test>` nếu muốn bỏ output;
@@ -192,27 +218,8 @@ restart có thể ký vote khác với vote nó đã gửi trước khi dừng. 
 như một Byzantine fault, nên chỉ restart tối đa `f` node cùng lúc. Nếu node bị
 kill cứng, xóa `running.lock` trong thư mục output của node đó trước khi chạy lại.
 
-Kiểm thử thủ công:
-
-```text
-python tests/run_local_cluster.py --init sync-test --f 3
-python tests/run_local_cluster.py --config-dir config/sync-test
-python tests/send_bulk_transactions.py --config-dir config/sync-test --via 9 --count 500 --rate 100
-```
-
-1. Chờ vài chục block, rồi dừng node 3 bằng Ctrl+C trong terminal của nó (chạy
-   từng node riêng bằng `--node 3` để dễ dừng một node).
-2. Ghi height và state root trong `local-runs/sync-test/node-03/result.json`.
-3. Tiếp tục gửi transaction để mạng chạy thêm block khi node 3 vắng mặt.
-4. Sửa `config/sync-test/node-03.json`, thêm `"Recover": true`, rồi chạy lại:
-   `python tests/run_local_cluster.py --config-dir config/sync-test --node 3`.
-5. Kỳ vọng: `events.jsonl` của node 3 có `ledger_recovered` với đúng height ở
-   bước 2, sau đó node nhận các block còn thiếu và bắt kịp mạng. So sánh
-   `/status` của node 3 (`http://127.0.0.1:31003/status`) với node khác: cùng
-   height và cùng state root.
-6. Kiểm tra lỗi: dừng node, sửa một byte trong `ledger.db` hoặc dùng ledger của
-   chain khác, rồi chạy với `Recover`. Node phải báo `restore height N: ...` hoặc
-   `ledger belongs to a different chain` và không join mạng.
+`run.py --node N` chạy riêng một node trong terminal hiện tại, phù hợp để cho
+node khởi động trễ hoặc restart với `Recover: true` rồi quan sát tốc độ sync.
 
 ```text
 gofmt -w src

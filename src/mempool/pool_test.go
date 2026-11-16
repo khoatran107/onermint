@@ -13,8 +13,12 @@ import (
 )
 
 func tx(t *testing.T, nonce uint64) types.Transaction {
+	return txWithSeed(t, nonce, 71)
+}
+
+func txWithSeed(t *testing.T, nonce uint64, seed byte) types.Transaction {
 	t.Helper()
-	key := ed25519.NewKeyFromSeed(bytes.Repeat([]byte{71}, 32)) // Public TEST-ONLY fixture.
+	key := ed25519.NewKeyFromSeed(bytes.Repeat([]byte{seed}, 32)) // Public TEST-ONLY fixture.
 	pub := types.PublicKey(key[32:])
 	v, err := crypt.SignTransaction(types.Transaction{ChainID: "pool", Sender: pub, TargetKey: hex.EncodeToString(pub[:]) + "/value", Value: []byte("dummy"), Nonce: nonce}, key)
 	if err != nil {
@@ -23,7 +27,7 @@ func tx(t *testing.T, nonce uint64) types.Transaction {
 	return v
 }
 func TestPoolOrderingReplayAndIsolation(t *testing.T) {
-	p := mempool.New(20, 20000, 2000)
+	p := mempool.New(20, 20, 10, 10, 20000, 2000)
 	var s state.State
 	third, first, second := tx(t, 3), tx(t, 1), tx(t, 2)
 	if _, err := p.Admit("pool", s, third); err != nil {
@@ -89,18 +93,21 @@ func TestPoolRejectsBadAndBoundedInputs(t *testing.T) {
 					t.Fatal(err)
 				}
 			}
-			p := mempool.New(10, 20000, 2000)
+			p := mempool.New(10, 10, 5, 5, 20000, 2000)
 			if _, err := p.Admit("pool", s, v); err == nil || p.Len() != 0 {
 				t.Fatal("bad transaction entered pool")
 			}
 		})
 	}
-	p := mempool.New(1, 2000, 2000)
+	p := mempool.New(1, 1, 1, 1, 2000, 2000)
 	if _, err := p.Admit("pool", s, tx(t, 1)); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := p.Admit("pool", s, tx(t, 2)); err == nil {
-		t.Fatal("ignored count bound")
+	if _, err := p.Admit("pool", s, tx(t, 2)); err != nil {
+		t.Fatal("global queue was not available")
+	}
+	if _, err := p.Admit("pool", s, tx(t, 3)); err == nil {
+		t.Fatal("ignored global slot and queue bounds")
 	}
 	if len(p.Select(s, 10, 10)) != 0 {
 		t.Fatal("ignored block byte bound")
@@ -108,7 +115,7 @@ func TestPoolRejectsBadAndBoundedInputs(t *testing.T) {
 }
 
 func TestSnapshotIsOrderedAndIsolated(t *testing.T) {
-	p := mempool.New(10, 20000, 2000)
+	p := mempool.New(10, 10, 5, 5, 20000, 2000)
 	var s state.State
 	for _, nonce := range []uint64{3, 1, 2} {
 		if _, err := p.Admit("pool", s, tx(t, nonce)); err != nil {
@@ -122,5 +129,33 @@ func TestSnapshotIsOrderedAndIsolated(t *testing.T) {
 	snapshot[0].Value[0] ^= 1
 	if got := p.Snapshot(); string(got[0].Value) != "dummy" {
 		t.Fatal("snapshot exposed mutable mempool storage")
+	}
+}
+
+func TestAccountSlotsQueueAndEvictionReleaseCapacity(t *testing.T) {
+	p := mempool.New(4, 2, 2, 1, 20000, 2000)
+	var s state.State
+	first, second, third, fourth := tx(t, 1), tx(t, 2), tx(t, 3), tx(t, 4)
+	firstID, err := p.Admit("pool", s, first)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err = p.Admit("pool", s, second); err != nil {
+		t.Fatal(err)
+	}
+	if _, err = p.Admit("pool", s, third); err != nil {
+		t.Fatal("account queue was not available")
+	}
+	if _, err = p.Admit("pool", s, fourth); err == nil {
+		t.Fatal("accepted transaction beyond AccountQueue")
+	}
+	if _, err = p.Admit("pool", s, txWithSeed(t, 1, 72)); err != nil {
+		t.Fatalf("limit leaked across accounts: %v", err)
+	}
+	if !p.Remove(firstID) {
+		t.Fatal("failed to evict pending transaction")
+	}
+	if _, err = p.Admit("pool", s, fourth); err != nil {
+		t.Fatalf("eviction did not release account capacity: %v", err)
 	}
 }

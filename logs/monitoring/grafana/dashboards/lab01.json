@@ -1,14 +1,193 @@
 {
-  "uid": "lab01-network", "title": "Lab01 Blockchain Network", "description": "Validator metrics and logs", "schemaVersion": 41,
-  "refresh": "2s", "time": {"from": "now-15m", "to": "now"},
-  "templating": {"list": [{"name":"node","type":"query","datasource":{"type":"prometheus","uid":"prometheus"},"query":{"query":"label_values(lab01_ledger_height, node)"},"includeAll":true,"multi":true,"current":{"text":"All","value":"$__all"}}]},
+  "uid": "lab01-network",
+  "title": "Lab01 Blockchain Network",
+  "description": "Validator health, consensus progress, batching, faults and logs",
+  "tags": ["lab01", "blockchain"],
+  "schemaVersion": 41,
+  "refresh": "2s",
+  "time": {"from": "now-15m", "to": "now"},
+  "templating": {
+    "list": [
+      {
+        "name": "node",
+        "label": "Validator",
+        "type": "query",
+        "datasource": {"type": "prometheus", "uid": "prometheus"},
+        "query": {"query": "label_values(up{job=\"lab01\"}, node)"},
+        "includeAll": true,
+        "allValue": ".*",
+        "multi": true,
+        "current": {"text": "All", "value": "$__all"}
+      }
+    ]
+  },
   "panels": [
-    {"id":1,"type":"timeseries","title":"Ledger height","datasource":{"type":"prometheus","uid":"prometheus"},"targets":[{"expr":"lab01_ledger_height{node=~\"$node\"}","legendFormat":"node {{node}}"}],"gridPos":{"x":0,"y":0,"w":12,"h":8}},
-    {"id":2,"type":"timeseries","title":"RAM mempool size","datasource":{"type":"prometheus","uid":"prometheus"},"targets":[{"expr":"lab01_mempool_transactions{node=~\"$node\"}","legendFormat":"node {{node}}"}],"gridPos":{"x":12,"y":0,"w":12,"h":8}},
-    {"id":3,"type":"timeseries","title":"Consensus round","datasource":{"type":"prometheus","uid":"prometheus"},"targets":[{"expr":"lab01_consensus_round{node=~\"$node\"}","legendFormat":"node {{node}}"}],"gridPos":{"x":0,"y":8,"w":8,"h":7}},
-    {"id":4,"type":"timeseries","title":"Consensus step (1 propose, 2 prevote, 3 precommit)","datasource":{"type":"prometheus","uid":"prometheus"},"targets":[{"expr":"lab01_consensus_step{node=~\"$node\"}","legendFormat":"node {{node}}"}],"gridPos":{"x":8,"y":8,"w":8,"h":7}},
-    {"id":5,"type":"timeseries","title":"Important event rate","datasource":{"type":"prometheus","uid":"prometheus"},"targets":[{"expr":"sum by (node,event) (rate(lab01_events_total{node=~\"$node\",event=~\"state_commit|block_wait_elapsed|consensus_timeout|transaction_reject|fault_.*|queue_full\"}[1m]))","legendFormat":"node {{node}} {{event}}"}],"gridPos":{"x":16,"y":8,"w":8,"h":7}},
-    {"id":6,"type":"logs","title":"Validator event logs","datasource":{"type":"loki","uid":"loki"},"targets":[{"expr":"{job=\"lab01\"} | json","refId":"A"}],"options":{"showTime":true,"wrapLogMessage":true,"enableLogDetails":true},"gridPos":{"x":0,"y":15,"w":24,"h":11}}
+    {
+      "id": 1,
+      "type": "text",
+      "title": "How to read this dashboard",
+      "options": {
+        "mode": "markdown",
+        "content": "No data? Start validators, then run `python tests/prepare_monitoring.py --config-dir config/<scenario>` and restart Prometheus. **Finalized gap must remain 0.** Consensus height is normally finalized height + 1."
+      },
+      "gridPos": {"x": 0, "y": 0, "w": 24, "h": 3}
+    },
+    {
+      "id": 2,
+      "type": "stat",
+      "title": "Reachable validators",
+      "datasource": {"type": "prometheus", "uid": "prometheus"},
+      "targets": [{"expr": "sum(up{job=\"lab01\",node=~\"$node\"})", "instant": true}],
+      "fieldConfig": {"defaults": {"color": {"mode": "thresholds"}, "thresholds": {"mode": "absolute", "steps": [{"color": "red"}, {"color": "green", "value": 1}]}}, "overrides": []},
+      "options": {"colorMode": "background", "graphMode": "none", "textMode": "value_and_name"},
+      "gridPos": {"x": 0, "y": 3, "w": 6, "h": 4}
+    },
+    {
+      "id": 3,
+      "type": "stat",
+      "title": "Finalized height (minimum)",
+      "datasource": {"type": "prometheus", "uid": "prometheus"},
+      "targets": [{"expr": "min(lab01_ledger_height{node=~\"$node\"})", "instant": true}],
+      "options": {"colorMode": "value", "graphMode": "area", "textMode": "value_and_name"},
+      "gridPos": {"x": 6, "y": 3, "w": 6, "h": 4}
+    },
+    {
+      "id": 4,
+      "type": "stat",
+      "title": "Finalized height gap",
+      "description": "Must be zero for agreement among reachable validators.",
+      "datasource": {"type": "prometheus", "uid": "prometheus"},
+      "targets": [{"expr": "max(lab01_ledger_height{node=~\"$node\"}) - min(lab01_ledger_height{node=~\"$node\"})", "instant": true}],
+      "fieldConfig": {"defaults": {"color": {"mode": "thresholds"}, "thresholds": {"mode": "absolute", "steps": [{"color": "green"}, {"color": "red", "value": 1}]}}, "overrides": []},
+      "options": {"colorMode": "background", "graphMode": "none", "textMode": "value_and_name"},
+      "gridPos": {"x": 12, "y": 3, "w": 6, "h": 4}
+    },
+    {
+      "id": 5,
+      "type": "stat",
+      "title": "Pending transactions",
+      "datasource": {"type": "prometheus", "uid": "prometheus"},
+      "targets": [{"expr": "sum(lab01_mempool_transactions{node=~\"$node\"})", "instant": true}],
+      "options": {"colorMode": "value", "graphMode": "area", "textMode": "value_and_name"},
+      "gridPos": {"x": 18, "y": 3, "w": 6, "h": 4}
+    },
+    {
+      "id": 6,
+      "type": "timeseries",
+      "title": "Finalized height by validator",
+      "datasource": {"type": "prometheus", "uid": "prometheus"},
+      "targets": [{"expr": "lab01_ledger_height{node=~\"$node\"}", "legendFormat": "node {{node}}"}],
+      "fieldConfig": {"defaults": {"custom": {"drawStyle": "line", "lineWidth": 2, "showPoints": "never"}}, "overrides": []},
+      "gridPos": {"x": 0, "y": 7, "w": 12, "h": 8}
+    },
+    {
+      "id": 7,
+      "type": "timeseries",
+      "title": "RAM mempool by validator",
+      "datasource": {"type": "prometheus", "uid": "prometheus"},
+      "targets": [{"expr": "lab01_mempool_transactions{node=~\"$node\"}", "legendFormat": "node {{node}}"}],
+      "fieldConfig": {"defaults": {"min": 0, "custom": {"drawStyle": "line", "lineWidth": 2, "showPoints": "never"}}, "overrides": []},
+      "gridPos": {"x": 12, "y": 7, "w": 12, "h": 8}
+    },
+    {
+      "id": 8,
+      "type": "state-timeline",
+      "title": "Consensus step",
+      "description": "1=PROPOSE, 2=PREVOTE, 3=PRECOMMIT",
+      "datasource": {"type": "prometheus", "uid": "prometheus"},
+      "targets": [{"expr": "lab01_consensus_step{node=~\"$node\"}", "legendFormat": "node {{node}}"}],
+      "fieldConfig": {
+        "defaults": {
+          "mappings": [
+            {"type": "value", "options": {"1": {"text": "PROPOSE", "color": "blue"}, "2": {"text": "PREVOTE", "color": "orange"}, "3": {"text": "PRECOMMIT", "color": "green"}}}
+          ]
+        },
+        "overrides": []
+      },
+      "options": {"mergeValues": true, "showValue": "always", "rowHeight": 0.8},
+      "gridPos": {"x": 0, "y": 15, "w": 12, "h": 8}
+    },
+    {
+      "id": 9,
+      "type": "timeseries",
+      "title": "Consensus height and round",
+      "datasource": {"type": "prometheus", "uid": "prometheus"},
+      "targets": [
+        {"expr": "lab01_consensus_height{node=~\"$node\"}", "legendFormat": "height node {{node}}"},
+        {"expr": "lab01_consensus_round{node=~\"$node\"}", "legendFormat": "round node {{node}}"}
+      ],
+      "gridPos": {"x": 12, "y": 15, "w": 12, "h": 8}
+    },
+    {
+      "id": 10,
+      "type": "timeseries",
+      "title": "Commits and batch waits",
+      "datasource": {"type": "prometheus", "uid": "prometheus"},
+      "targets": [
+        {"expr": "sum by (node,event) (rate(lab01_events_total{node=~\"$node\",event=~\"state_commit|block_wait_elapsed\"}[1m]))", "legendFormat": "node {{node}} {{event}}"}
+      ],
+      "gridPos": {"x": 0, "y": 23, "w": 8, "h": 7}
+    },
+    {
+      "id": 11,
+      "type": "timeseries",
+      "title": "Timeouts and rejected transactions",
+      "datasource": {"type": "prometheus", "uid": "prometheus"},
+      "targets": [
+        {"expr": "sum by (node,event) (rate(lab01_events_total{node=~\"$node\",event=~\"consensus_timeout|transaction_reject|queue_full\"}[1m]))", "legendFormat": "node {{node}} {{event}}"}
+      ],
+      "gridPos": {"x": 8, "y": 23, "w": 8, "h": 7}
+    },
+    {
+      "id": 12,
+      "type": "timeseries",
+      "title": "Injected network faults",
+      "datasource": {"type": "prometheus", "uid": "prometheus"},
+      "targets": [
+        {"expr": "sum by (node,event) (rate(lab01_events_total{node=~\"$node\",event=~\"fault_.*|block|unblock\"}[1m]))", "legendFormat": "node {{node}} {{event}}"}
+      ],
+      "gridPos": {"x": 16, "y": 23, "w": 8, "h": 7}
+    },
+    {
+      "id": 13,
+      "type": "timeseries",
+      "title": "Outbound queue",
+      "datasource": {"type": "prometheus", "uid": "prometheus"},
+      "targets": [{"expr": "lab01_outbound_queue{node=~\"$node\"}", "legendFormat": "node {{node}}"}],
+      "gridPos": {"x": 0, "y": 30, "w": 8, "h": 7}
+    },
+    {
+      "id": 14,
+      "type": "stat",
+      "title": "Min transactions per block",
+      "datasource": {"type": "prometheus", "uid": "prometheus"},
+      "targets": [{"expr": "max(lab01_config_min_block_transactions{node=~\"$node\"})", "instant": true}],
+      "options": {"colorMode": "value", "graphMode": "none", "textMode": "value_and_name"},
+      "gridPos": {"x": 8, "y": 30, "w": 8, "h": 7}
+    },
+    {
+      "id": 15,
+      "type": "stat",
+      "title": "Maximum batch wait",
+      "datasource": {"type": "prometheus", "uid": "prometheus"},
+      "targets": [{"expr": "max(lab01_config_block_max_wait_milliseconds{node=~\"$node\"})", "instant": true}],
+      "fieldConfig": {"defaults": {"unit": "ms"}, "overrides": []},
+      "options": {"colorMode": "value", "graphMode": "none", "textMode": "value_and_name"},
+      "gridPos": {"x": 16, "y": 30, "w": 8, "h": 7}
+    },
+    {
+      "id": 16,
+      "type": "logs",
+      "title": "Validator events",
+      "datasource": {"type": "loki", "uid": "loki"},
+      "targets": [
+        {
+          "expr": "{job=\"lab01\"} | json | Node=~\"$node\" | line_format \"{{.Time}} node={{.Node}} {{.Event}} height={{.Height}} round={{.Round}} {{.Detail}}\"",
+          "refId": "A"
+        }
+      ],
+      "options": {"showTime": true, "wrapLogMessage": true, "enableLogDetails": true, "sortOrder": "Descending"},
+      "gridPos": {"x": 0, "y": 37, "w": 24, "h": 12}
+    }
   ]
 }
-
