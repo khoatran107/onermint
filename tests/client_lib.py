@@ -22,7 +22,7 @@ def _blob(data):
 
 
 def canonical_tx_bytes(chain_id, sender, target_key, value, nonce):
-    """Must stay byte-identical to crypto.CanonicalTxBytes in Go and client/app.js."""
+    """Must stay byte-identical to crypto.CanonicalTxBytes in Go and tests/client_web/app.js."""
     return (b"\x01" + _blob(f"TX:{chain_id}".encode()) + sender
             + _blob(target_key.encode()) + _blob(value) + struct.pack(">Q", nonce))
 

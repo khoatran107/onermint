@@ -15,7 +15,7 @@ from urllib.request import urlopen
 REPO = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(REPO / "tests"))
 import run as launcher  # noqa: E402
-from client import Node, RPCError, Wallet  # noqa: E402
+from client_lib import Node, RPCError, Wallet  # noqa: E402
 
 FAILED = []
 DEFAULT_NETWORK = {"BaseTimeoutMS": 1000}  # Short rounds keep fault scenarios quick.
@@ -149,7 +149,7 @@ class Cluster:
     def submit(self, nonce, key="spam", value=None, via=SUBMIT_VIA):
         """Send `key` = `value` as transaction `nonce` to node `via`, signed by the external client key.
 
-        Signing and the JSON-RPC call happen here (tests/client.py); the node binary is not
+        Signing and the JSON-RPC call happen here (tests/client_lib.py); the node binary is not
         involved. The client key is a fresh Ed25519 pair outside the validator set. It is created
         on the first call and kept in config/<name>/client-key.hex so reruns sign identical
         transactions."""

@@ -49,7 +49,7 @@ func TestBrowserCanonicalTransactionEncodingMatchesGo(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	script := `const a=require('../../client/app.js'); const sender=Array.from({length:32},(_,i)=>i); const tx={ChainID:'encoding-test',Sender:sender,TargetKey:Buffer.from(sender).toString('hex')+'/message',Value:new TextEncoder().encode('hello'),Nonce:7}; process.stdout.write(a.bytesToHex(a.canonicalTxBytes(tx)));`
+	script := `const a=require('../../tests/client_web/app.js'); const sender=Array.from({length:32},(_,i)=>i); const tx={ChainID:'encoding-test',Sender:sender,TargetKey:Buffer.from(sender).toString('hex')+'/message',Value:new TextEncoder().encode('hello'),Nonce:7}; process.stdout.write(a.bytesToHex(a.canonicalTxBytes(tx)));`
 	output, err := exec.Command("node", "-e", script).CombinedOutput()
 	if err != nil {
 		t.Fatalf("browser encoder: %v: %s", err, output)

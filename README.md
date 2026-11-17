@@ -64,11 +64,11 @@ python tests/scenarios/t1_normal.py
 
 ## Gửi transaction
 
-**Web client** (`client/`, static, node không serve UI). Dùng bản đã deploy tại
+**Web client** (`tests/client_web/`, static, node không serve UI). Dùng bản đã deploy tại
 <https://lab01-kappa.vercel.app/>, hoặc chạy cục bộ:
 
 ```bash
-python3 -m http.server 8080 --directory client   # mở http://localhost:8080/
+python3 -m http.server 8080 --directory tests/client_web   # mở http://localhost:8080/
 ```
 
 Nhập **Node URL** (ví dụ `http://127.0.0.1:31009`),
@@ -76,18 +76,18 @@ rồi chỉ cần nhập `Key` và `Value`. Browser tự tạo ví Ed25519 test-
 ký và gửi JSON-RPC; private key không rời browser. **Xem key-value state** hiển
 thị state và nonce đã commit trên node đang chọn.
 
-Deploy lên Vercel: `vercel --cwd client --prod` (hoặc Root Directory `client`,
+Deploy lên Vercel: `vercel --cwd tests/client_web --prod` (hoặc Root Directory `tests/client_web`,
 preset **Other**, không build command). Để máy khác trong LAN gọi node, đặt
 `"AdminAddress": "0.0.0.0:31000"`, nhập IP LAN thật (không phải `0.0.0.0`) vào
 client, mở port trên firewall và cho phép quyền **Local Network** khi browser hỏi.
 
-**Script client:** viết transaction trong `main()` của `tests/scripted_client.py`:
+**Script client:** viết transaction trong `main()` của `tests/client_py/client.py`:
 
 ```text
-NODE_URL=http://127.0.0.1:31009 python tests/scripted_client.py
+NODE_URL=http://127.0.0.1:31009 python tests/client_py/client.py
 ```
 
-Ví lưu ở `tests/wallets/<tên>.hex` (gitignore). Gửi tới node honest.
+Ví lưu ở `tests/client_py/wallets/<tên>.hex` (gitignore). Gửi tới node honest.
 
 ## Monitoring
 
@@ -404,5 +404,5 @@ go test ./src/crypto -run TestGoldenVectors -update
 | `src/consensus` | Propose, PREVOTE, PRECOMMIT, finality |
 | `src/runtime` | Node runtime độc lập IO; Byzantine behaviour trong `adversary.go` |
 | `src/realnet` | GossipSub, gRPC stream, JSON-RPC/admin HTTP, network fault, event log |
-| `tests` | Launcher `run.py`, suite `run_tests.py`, client Python, kịch bản T1-T8 |
+| `tests` | Launcher `run.py`, suite `run_tests.py`, kịch bản T1-T8, thư viện client `client_lib.py`, script client `client_py/`, web client `client_web/` |
 | `logs` | Log runtime và bộ Grafana/Prometheus/Loki/Alloy |

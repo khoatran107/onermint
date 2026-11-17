@@ -1,9 +1,9 @@
 """Scripted client: tự tay viết từng transaction trong main() rồi chạy
 
-    python tests/scripted_client.py
-    NODE_URL=http://192.168.1.10:31003 python tests/scripted_client.py
+    python tests/client_py/client.py
+    NODE_URL=http://192.168.1.10:31003 python tests/client_py/client.py
 
-Dùng tests/client.py (ký Ed25519 + JSON-RPC). Cần `pip install cryptography`.
+Dùng tests/client_lib.py (ký Ed25519 + JSON-RPC). Cần `pip install cryptography`.
 """
 
 import json
@@ -12,14 +12,15 @@ import sys
 import time
 from pathlib import Path
 
-from client import Node, RPCError, Wallet
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent))  # tests/, where client_lib.py lives
+from client_lib import Node, RPCError, Wallet  # noqa: E402
 
 DEFAULT_NODE_URL = "http://127.0.0.1:31000"
 WALLET_DIR = Path(__file__).resolve().parent / "wallets"  # mỗi ví một file hex(seed||pubkey), test-only
 
 
 def wallet(name):
-    """Ví tên `name`; tạo lần đầu rồi lưu vào tests/wallets/<name>.hex. Mỗi tên là một Sender khác nhau."""
+    """Ví tên `name`; tạo lần đầu rồi lưu vào tests/client_py/wallets/<name>.hex. Mỗi tên là một Sender khác nhau."""
     if not name.replace("_", "").replace("-", "").isalnum():
         raise ValueError("tên ví chỉ gồm chữ, số, '_' và '-'")
     WALLET_DIR.mkdir(exist_ok=True)
@@ -84,7 +85,7 @@ def main():
 
     # Làm hỏng chữ ký sau khi ký, node phải từ chối.
     # def corrupt(tx): tx["Signature"][0] ^= 1
-    # attempt("bad", alice, "bad", "x", mutate=corrupt)
+    # attempt("bad",c alice, "bad", "x", mutate=corrupt)
 
     # Chỉ ký và in JSON, không gửi.
     # print(send(alice, "k", "v", dry_run=True))

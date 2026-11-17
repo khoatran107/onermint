@@ -50,9 +50,10 @@ python3 tests/run_tests.py --race --output local-runs/<fresh-dir>   # everything
 | `src/cmd/node` | Binary entry point (`-config`, `-init-dir`, `-inspect`) |
 | `tests/run.py` | Cluster launcher and shared helpers (`load_configs`, `start_nodes`, `admin_url`, …) |
 | `tests/scenarios/` | T1–T8 end-to-end scenarios on top of `harness.py` |
-| `tests/client.py` | Python Ed25519 + JSON-RPC client used by the harness |
+| `tests/client_lib.py` | Python Ed25519 + JSON-RPC client library used by the harness and `test_vectors.py` |
+| `tests/client_py/` | Scripted client (`client.py`) for sending hand-written transactions; wallets in `wallets/` |
 | `config/<scenario>/` | Committed scenario configs **and test-only keys** |
-| `client/` | Static browser client (Vercel). Out of scope unless asked |
+| `tests/client_web/` | Static browser client (Vercel). Out of scope unless asked |
 | `logs/monitoring/` | Grafana/Prometheus/Loki stack |
 
 ## Invariants: do not break these
@@ -62,7 +63,7 @@ python3 tests/run_tests.py --race --output local-runs/<fresh-dir>   # everything
    `State.Root`). `src/crypto/testdata/vectors.json` pins them. If `TestGoldenVectors`
    fails, the change is wrong. Do **not** run `-update` unless the user explicitly asks
    for a format change. A format change invalidates every committed config and key, and
-   breaks `tests/client.py` and `client/app.js`.
+   breaks `tests/client_lib.py` and `tests/client_web/app.js`.
 2. **Domain separation.** Every signed payload starts with `"<DOMAIN>:<chainID>"`, using the
    `crypt.Domain*` constants. A new signed message type needs a new domain constant.
 3. **Determinism.** Never let map iteration order decide an outcome, a proof order or an
@@ -133,7 +134,7 @@ Follow README → "Thêm kịch bản với behaviour mới". In short:
    full `run_tests.py`. Report the actual PASS/FAIL lines.
 3. Touched a JSON shape, event name or behaviour → update the readers (scenarios,
    dashboard, README).
-4. Do not commit `local-runs/`, `tests/wallets/` or new private keys outside `config/`.
+4. Do not commit `local-runs/`, `tests/client_py/wallets/` or new private keys outside `config/`.
 
 ## Known gaps (not bugs to fix silently; ask first)
 

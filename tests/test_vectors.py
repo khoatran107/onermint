@@ -1,4 +1,4 @@
-"""Check tests/client.py against the Go golden vectors (src/crypto/testdata/vectors.json).
+"""Check tests/client_lib.py against the Go golden vectors (src/crypto/testdata/vectors.json).
 
 Run: python tests/test_vectors.py   (also run by tests/run_tests.py)
 """
@@ -10,7 +10,7 @@ import sys
 from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
-from client import Wallet, canonical_tx_bytes  # noqa: E402
+from client_lib import Wallet, canonical_tx_bytes  # noqa: E402
 
 VECTORS = Path(__file__).resolve().parent.parent / "src" / "crypto" / "testdata" / "vectors.json"
 
@@ -26,7 +26,7 @@ def main():
                                  v["tx_value"], int(v["tx_nonce"]))
     if bytes(tx["Signature"]).hex() != v["tx_signature"]:
         sys.exit("FAIL Python transaction signature differs from Go")
-    print("ok   tests/client.py matches Go golden vectors")
+    print("ok   tests/client_lib.py matches Go golden vectors")
 
 
 if __name__ == "__main__":

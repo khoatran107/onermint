@@ -40,5 +40,5 @@ Lab01.pdf
 # T1-T8 scenarios rerun with identical identities. Never reuse them elsewhere.
 /local-runs/
 __pycache__/
-# tests/scripted_client.py wallets (private keys)
-tests/wallets/
+
+tests/client_py/wallets
