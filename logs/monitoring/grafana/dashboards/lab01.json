@@ -233,17 +233,197 @@
     },
     {
       "id": 16,
-      "type": "logs",
+      "type": "table",
       "title": "Validator events",
-      "datasource": {"type": "loki", "uid": "loki"},
+      "description": "Events of all nodes, newest first. Filter inside the table: click the funnel icon in the Node, Event, Height or Round header and tick one or more values (the list has a search box). Click a header to sort. Events without a height or round (startup, mempool) show 0. Transport noise is hidden (receive/send/gossip/stream events, the generic reject that repeats a specific *_reject, and harmless duplicate transaction/vote rejects). Returns at most 20000 lines: zoom the time range for older events.",
+      "datasource": {
+        "type": "loki",
+        "uid": "loki"
+      },
       "targets": [
         {
-          "expr": "{job=\"lab01\"} | json | Node=~\"$node\" | line_format \"{{ or .Time .WallTime }} node={{.Node}} {{.Event}} height={{.Height}} round={{.Round}} {{ or .Detail .Reason }}\"",
-          "refId": "A"
+          "refId": "A",
+          "queryType": "range",
+          "direction": "backward",
+          "maxLines": 20000,
+          "expr": "{job=\"lab01\"} | json | Event!~\"receive|gossip_receive|send|gossip_publish|gossip_connect|stream_.*|fault_normal|reject\" | label_format node=`{{ .Node }}`, event=`{{ .Event }}`, height=`{{ or .Height \"0\" }}`, round=`{{ or .Round \"0\" }}`, detail=`{{ or .Detail .Reason }}` | detail!~\"duplicate (transaction|vote)\" | keep node, event, height, round, detail"
         }
       ],
-      "options": {"showTime": true, "wrapLogMessage": true, "enableLogDetails": true, "sortOrder": "Descending"},
-      "gridPos": {"x": 0, "y": 44, "w": 24, "h": 12}
+      "transformations": [
+        {
+          "id": "extractFields",
+          "options": {
+            "source": "labels",
+            "replace": false,
+            "keepTime": false
+          }
+        },
+        {
+          "id": "filterFieldsByName",
+          "options": {
+            "include": {
+              "names": [
+                "Time",
+                "node",
+                "event",
+                "height",
+                "round",
+                "detail"
+              ]
+            }
+          }
+        },
+        {
+          "id": "convertFieldType",
+          "options": {
+            "conversions": [
+              {
+                "targetField": "node",
+                "destinationType": "number"
+              },
+              {
+                "targetField": "height",
+                "destinationType": "number"
+              },
+              {
+                "targetField": "round",
+                "destinationType": "number"
+              }
+            ]
+          }
+        },
+        {
+          "id": "organize",
+          "options": {
+            "indexByName": {
+              "Time": 0,
+              "node": 1,
+              "event": 2,
+              "height": 3,
+              "round": 4,
+              "detail": 5
+            },
+            "renameByName": {
+              "node": "Node",
+              "event": "Event",
+              "height": "Height",
+              "round": "Round",
+              "detail": "Detail"
+            }
+          }
+        },
+        {
+          "id": "sortBy",
+          "options": {
+            "fields": {},
+            "sort": [
+              {
+                "field": "Time",
+                "desc": true
+              }
+            ]
+          }
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "custom": {
+            "filterable": true,
+            "align": "auto"
+          }
+        },
+        "overrides": [
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "Time"
+            },
+            "properties": [
+              {
+                "id": "custom.width",
+                "value": 190
+              },
+              {
+                "id": "custom.filterable",
+                "value": false
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "Node"
+            },
+            "properties": [
+              {
+                "id": "custom.width",
+                "value": 80
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "Event"
+            },
+            "properties": [
+              {
+                "id": "custom.width",
+                "value": 230
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "Height"
+            },
+            "properties": [
+              {
+                "id": "custom.width",
+                "value": 90
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "Round"
+            },
+            "properties": [
+              {
+                "id": "custom.width",
+                "value": 80
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "Detail"
+            },
+            "properties": [
+              {
+                "id": "custom.filterable",
+                "value": false
+              }
+            ]
+          }
+        ]
+      },
+      "options": {
+        "showHeader": true,
+        "cellHeight": "sm",
+        "footer": {
+          "show": false
+        }
+      },
+      "gridPos": {
+        "x": 0,
+        "y": 44,
+        "w": 24,
+        "h": 12
+      }
     }
   ]
 }

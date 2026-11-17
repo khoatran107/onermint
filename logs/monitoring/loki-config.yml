@@ -32,4 +32,6 @@ limits_config:
   ingestion_burst_size_mb: 128
   per_stream_rate_limit: 32MB
   per_stream_rate_limit_burst: 64MB
+  # The Validator events table asks for up to 20000 lines (default cap 5000).
+  max_entries_limit_per_query: 20000
 
