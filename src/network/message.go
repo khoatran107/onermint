@@ -18,7 +18,21 @@ const (
 	Body        Kind = "body"
 	Vote        Kind = "vote"
 	Transaction Kind = "tx"
+	Hello       Kind = "hello" // Stream handshake only; never delivered to the runtime.
 )
+
+// Valid reports whether k is a known transport kind.
+func (k Kind) Valid() bool {
+	switch k {
+	case Header, Request, Body, Vote, Transaction, Hello:
+		return true
+	}
+	return false
+}
+
+// Broadcastable reports whether k may be sent to all validators via GossipSub.
+// Requests and bodies are point-to-point, after header acceptance.
+func (k Kind) Broadcastable() bool { return k == Header || k == Vote || k == Transaction }
 
 var ErrQueueFull = errors.New("outbound queue full")
 

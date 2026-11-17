@@ -10,16 +10,14 @@ import (
 	cons "blockchain-lab01/src/consensus"
 	crypt "blockchain-lab01/src/crypto"
 	"blockchain-lab01/src/network"
+	"blockchain-lab01/src/runtime"
 	"blockchain-lab01/src/state"
 	"blockchain-lab01/src/types"
 )
 
 // These test-only peers run in their own OS processes. They possess only their
 // own configured private key. No honest state/key is exposed to this driver.
-type attackHeader struct {
-	Proposal *cons.Proposal  `json:",omitempty"`
-	Decision *cons.Finalized `json:",omitempty"`
-}
+type attackHeader = runtime.WireHeader
 type attackBlock struct {
 	header []byte
 	body   []byte

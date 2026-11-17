@@ -44,19 +44,43 @@ func BodyHash(chainID string, body types.BlockBody) (types.Hash, error) {
 	return HashBytes(b), nil
 }
 
-func sign(key ed25519.PrivateKey, pub types.PublicKey, payload []byte) (types.Signature, error) {
+// IdentityOf checks that key is a well-formed Ed25519 key whose cached public
+// half matches its seed, and returns that public key.
+func IdentityOf(key ed25519.PrivateKey) (types.PublicKey, error) {
 	if len(key) != ed25519.PrivateKeySize {
-		return types.Signature{}, fmt.Errorf("invalid private key length")
+		return types.PublicKey{}, fmt.Errorf("invalid private key length")
 	}
 	// Validate the cached public half too: arbitrary 64-byte inputs must not
 	// produce signatures with an inconsistent identity.
 	derived := ed25519.NewKeyFromSeed(key[:ed25519.SeedSize])
-	if !bytes.Equal(derived, key) || !bytes.Equal(derived[32:], pub[:]) {
-		return types.Signature{}, fmt.Errorf("private key does not match identity")
+	if !bytes.Equal(derived, key) {
+		return types.PublicKey{}, fmt.Errorf("inconsistent private key")
+	}
+	return types.PublicKey(derived[ed25519.SeedSize:]), nil
+}
+
+// CheckKey verifies that key is consistent and belongs to pub.
+func CheckKey(key ed25519.PrivateKey, pub types.PublicKey) error {
+	derived, err := IdentityOf(key)
+	if err != nil {
+		return err
+	}
+	if derived != pub {
+		return fmt.Errorf("private key does not match identity")
+	}
+	return nil
+}
+
+// Sign signs payload after checking that key belongs to pub.
+func Sign(key ed25519.PrivateKey, pub types.PublicKey, payload []byte) (types.Signature, error) {
+	if err := CheckKey(key, pub); err != nil {
+		return types.Signature{}, err
 	}
 	return types.Signature(ed25519.Sign(key, payload)), nil
 }
-func verify(expectedChain, chain string, pub types.PublicKey, payload []byte, sig types.Signature) error {
+
+// Verify checks the chain scope and the signature over payload.
+func Verify(expectedChain, chain string, pub types.PublicKey, payload []byte, sig types.Signature) error {
 	if expectedChain == "" || expectedChain != chain {
 		return fmt.Errorf("unexpected chain ID")
 	}
@@ -72,7 +96,7 @@ func SignTransaction(tx types.Transaction, key ed25519.PrivateKey) (types.Transa
 	if err != nil {
 		return tx, err
 	}
-	sig, err := sign(key, tx.Sender, b)
+	sig, err := Sign(key, tx.Sender, b)
 	if err == nil {
 		tx.Signature = sig
 	}
@@ -83,14 +107,14 @@ func VerifyTransaction(expectedChain string, tx types.Transaction) error {
 	if err != nil {
 		return err
 	}
-	return verify(expectedChain, tx.ChainID, tx.Sender, b, tx.Signature)
+	return Verify(expectedChain, tx.ChainID, tx.Sender, b, tx.Signature)
 }
 func SignHeader(h types.BlockHeader, key ed25519.PrivateKey) (types.BlockHeader, error) {
 	b, err := CanonicalHeaderBytes(h)
 	if err != nil {
 		return h, err
 	}
-	sig, err := sign(key, types.PublicKey(h.Proposer), b)
+	sig, err := Sign(key, types.PublicKey(h.Proposer), b)
 	if err == nil {
 		h.Signature = sig
 	}
@@ -101,14 +125,14 @@ func VerifyHeader(expectedChain string, h types.BlockHeader) error {
 	if err != nil {
 		return err
 	}
-	return verify(expectedChain, h.ChainID, types.PublicKey(h.Proposer), b, h.Signature)
+	return Verify(expectedChain, h.ChainID, types.PublicKey(h.Proposer), b, h.Signature)
 }
 func SignVote(v types.Vote, key ed25519.PrivateKey) (types.Vote, error) {
 	b, err := CanonicalVoteBytes(v)
 	if err != nil {
 		return v, err
 	}
-	sig, err := sign(key, types.PublicKey(v.Validator), b)
+	sig, err := Sign(key, types.PublicKey(v.Validator), b)
 	if err == nil {
 		v.Signature = sig
 	}
@@ -119,5 +143,5 @@ func VerifyVote(expectedChain string, v types.Vote) error {
 	if err != nil {
 		return err
 	}
-	return verify(expectedChain, v.ChainID, types.PublicKey(v.Validator), b, v.Signature)
+	return Verify(expectedChain, v.ChainID, types.PublicKey(v.Validator), b, v.Signature)
 }

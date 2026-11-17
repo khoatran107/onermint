@@ -1,4 +1,4 @@
-"""Standalone transaction client for the test harness (Python twin of scripted_client.js).
+"""Standalone transaction client for the test harness (signs locally, talks JSON-RPC).
 
 It signs transactions itself and talks to a node only over JSON-RPC (`POST /rpc`), exactly
 like the browser client. The node binary is a validator and nothing else.

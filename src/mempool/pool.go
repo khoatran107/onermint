@@ -2,7 +2,6 @@
 package mempool
 
 import (
-	"bytes"
 	"encoding/json"
 	"fmt"
 	"sort"
@@ -29,8 +28,25 @@ type Pool struct {
 	maxBytes, maxTX                                      int
 }
 
-func New(globalSlots, globalQueue, accountSlots, accountQueue, bytesLimit, txLimit int) *Pool {
-	return &Pool{entries: make(map[types.Hash]entry), accountCount: make(map[types.PublicKey]int), globalSlots: globalSlots, globalQueue: globalQueue, accountSlots: accountSlots, accountQueue: accountQueue, maxBytes: bytesLimit, maxTX: txLimit}
+// Limits bounds the pool. Each account has AccountSlots protected slots
+// (drawn from GlobalSlots) plus up to AccountQueue overflow entries (drawn from
+// GlobalQueue). Field names match the flat node/network JSON configuration.
+type Limits struct {
+	MempoolBytes, MaxTxBytes                             int
+	AccountSlots, AccountQueue, GlobalSlots, GlobalQueue int
+}
+
+// Validate checks the slot/queue quotas; byte limits are validated by callers
+// that know their transport bounds.
+func (l Limits) Validate() error {
+	if l.AccountSlots < 1 || l.AccountQueue < 1 || l.GlobalSlots < l.AccountSlots || l.GlobalQueue < l.AccountQueue {
+		return fmt.Errorf("invalid mempool slot/queue limits")
+	}
+	return nil
+}
+
+func New(l Limits) *Pool {
+	return &Pool{entries: make(map[types.Hash]entry), accountCount: make(map[types.PublicKey]int), globalSlots: l.GlobalSlots, globalQueue: l.GlobalQueue, accountSlots: l.AccountSlots, accountQueue: l.AccountQueue, maxBytes: l.MempoolBytes, maxTX: l.MaxTxBytes}
 }
 func (p *Pool) Len() int { return len(p.entries) }
 func (p *Pool) Admit(chain string, s state.State, tx types.Transaction) (types.Hash, error) {
@@ -77,8 +93,7 @@ func (p *Pool) Admit(chain string, s state.State, tx types.Transaction) (types.H
 	if len(b) > p.maxTX || p.used+len(b) > p.maxBytes {
 		return id, fmt.Errorf("mempool capacity exceeded")
 	}
-	tx.Value = append([]byte(nil), tx.Value...)
-	p.entries[id] = entry{tx, len(b)}
+	p.entries[id] = entry{tx.Clone(), len(b)}
 	p.used += len(b)
 	p.accountCount[tx.Sender]++
 	if accountPending < p.accountSlots {
@@ -89,17 +104,7 @@ func (p *Pool) Admit(chain string, s state.State, tx types.Transaction) (types.H
 	return id, nil
 }
 func (p *Pool) Select(s state.State, count, byteLimit int) []types.Transaction {
-	entries := make([]entry, 0, len(p.entries))
-	for _, e := range p.entries {
-		entries = append(entries, e)
-	}
-	sort.Slice(entries, func(i, j int) bool {
-		a, b := entries[i].tx, entries[j].tx
-		if c := bytes.Compare(a.Sender[:], b.Sender[:]); c != 0 {
-			return c < 0
-		}
-		return a.Nonce < b.Nonce
-	})
+	entries := p.sorted()
 	nonces := make(map[types.PublicKey]uint64)
 	var txs []types.Transaction
 	used := len(`{"Transactions":[]}`)
@@ -111,8 +116,7 @@ func (p *Pool) Select(s state.State, count, byteLimit int) []types.Transaction {
 		if e.tx.Nonce != last+1 || len(txs) >= count || used+e.size+1 > byteLimit {
 			continue
 		}
-		tx := e.tx
-		tx.Value = append([]byte(nil), tx.Value...)
+		tx := e.tx.Clone()
 		txs = append(txs, tx)
 		used += e.size + 1
 		nonces[tx.Sender] = tx.Nonce
@@ -155,23 +159,29 @@ func (p *Pool) remove(id types.Hash, e entry) {
 // Snapshot returns a deterministic deep copy for read-only observation. The
 // node owner loop calls it, so inspection cannot race admission or pruning.
 func (p *Pool) Snapshot() []types.Transaction {
+	entries := p.sorted()
+	out := make([]types.Transaction, len(entries))
+	for i, e := range entries {
+		out[i] = e.tx.Clone()
+	}
+	return out
+}
+
+// sorted lists entries by (sender, nonce): the deterministic order used for
+// block selection and inspection.
+func (p *Pool) sorted() []entry {
 	entries := make([]entry, 0, len(p.entries))
 	for _, e := range p.entries {
 		entries = append(entries, e)
 	}
 	sort.Slice(entries, func(i, j int) bool {
 		a, b := entries[i].tx, entries[j].tx
-		if c := bytes.Compare(a.Sender[:], b.Sender[:]); c != 0 {
+		if c := types.ComparePublicKey(a.Sender, b.Sender); c != 0 {
 			return c < 0
 		}
 		return a.Nonce < b.Nonce
 	})
-	out := make([]types.Transaction, len(entries))
-	for i, e := range entries {
-		out[i] = e.tx
-		out[i].Value = append([]byte(nil), e.tx.Value...)
-	}
-	return out
+	return entries
 }
 
 func (p *Pool) Contains(id types.Hash) bool { _, ok := p.entries[id]; return ok }

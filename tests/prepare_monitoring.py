@@ -7,27 +7,8 @@ import sys
 
 
 REPO = Path(__file__).resolve().parent.parent
-
-
-def admin_address(config_path, config):
-    """Prefer the address actually bound by the running node process."""
-    output_dir = Path(config.get("OutputDir", ""))
-    if not output_dir.is_absolute():
-        output_dir = config_path.parent / output_dir
-    runtime_address = output_dir.resolve() / "admin"
-    if runtime_address.is_file():
-        address = runtime_address.read_text(encoding="utf-8").strip()
-        source = runtime_address
-    else:
-        address = config.get("AdminAddress", "")
-        source = config_path
-
-    _, separator, port = address.rpartition(":")
-    if not separator or not port.isdigit() or port == "0":
-        raise ValueError(
-            f"{config_path.name}: no running HTTP address found; start the node first"
-        )
-    return int(port), source
+sys.path.insert(0, str(REPO / "tests"))
+from run import admin_port  # noqa: E402
 
 
 def main():
@@ -50,7 +31,7 @@ def main():
     for path in configs:
         config = json.loads(path.read_text(encoding="utf-8"))
         node_id = config["NodeID"]
-        port, source = admin_address(path, config)
+        port, source = admin_port(path, config)
         if port in used_ports:
             raise ValueError(f"{path.name}: duplicate HTTP port {port}")
         used_ports.add(port)

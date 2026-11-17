@@ -1,6 +1,11 @@
 // Package types defines transport-independent Lab01 messages.
 package types
 
+import (
+	"bytes"
+	"fmt"
+)
+
 type Hash [32]byte
 type PublicKey [32]byte
 type Signature [64]byte
@@ -52,4 +57,36 @@ type Vote struct {
 	IsNil     bool
 	BlockHash Hash
 	Signature Signature
+}
+
+// Clone returns a copy that shares no mutable memory with t.
+func (t Transaction) Clone() Transaction {
+	t.Value = append([]byte(nil), t.Value...)
+	return t
+}
+
+// Clone deep-copies the ordered transaction list.
+func (b BlockBody) Clone() BlockBody {
+	txs := make([]Transaction, len(b.Transactions))
+	for i, tx := range b.Transactions {
+		txs[i] = tx.Clone()
+	}
+	return BlockBody{Transactions: txs}
+}
+
+// Clone deep-copies the body; the header holds only fixed-size values.
+func (b Block) Clone() Block {
+	b.Body = b.Body.Clone()
+	return b
+}
+
+// ComparePublicKey orders keys by raw bytes, for deterministic iteration.
+func ComparePublicKey(a, b PublicKey) int { return bytes.Compare(a[:], b[:]) }
+
+// CheckValidatorCount enforces the lab's fixed n = 3f + 1 validator set.
+func CheckValidatorCount(n, f int) error {
+	if f < 0 || n < 1 || (n-1)%3 != 0 || f != (n-1)/3 {
+		return fmt.Errorf("require n = 3f + 1")
+	}
+	return nil
 }

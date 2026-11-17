@@ -18,16 +18,20 @@ DEFAULT_GLOBAL_SLOTS = 1024
 DEFAULT_GLOBAL_QUEUE = 256
 
 REPO = Path(__file__).resolve().parent.parent
+CRASH_EXIT_CODE = 86  # runtime.CrashExitCode: expected exit of a crashed_proposer node.
 
 
 def handle_interrupt(_signum, _frame):
     raise KeyboardInterrupt
 
 
+def binary_path():
+    return REPO / "local-runs" / ("node.exe" if os.name == "nt" else "node")
+
+
 def build_node(go):
-    output = REPO / "local-runs"
-    output.mkdir(exist_ok=True)
-    binary = output / ("node.exe" if os.name == "nt" else "node")
+    binary = binary_path()
+    binary.parent.mkdir(exist_ok=True)
     subprocess.run([go, "build", "-buildvcs=false", "-o", str(binary), "./src/cmd/node"],
                    cwd=REPO, check=True)
     return binary
@@ -105,6 +109,53 @@ def load_configs(directory):
     return configs
 
 
+def admin_port(path, config, output=None):
+    """HTTP admin port of a node: the address the running process actually bound
+    (written to <OutputDir>/admin), else the configured AdminAddress.
+    Returns (port, source path)."""
+    if output is None:
+        output = Path(config.get("OutputDir", ""))
+        if not output.is_absolute():
+            output = (path.parent / output).resolve()
+    runtime_address = output / "admin"
+    if runtime_address.is_file():
+        address, source = runtime_address.read_text(encoding="utf-8").strip(), runtime_address
+    else:
+        address, source = config.get("AdminAddress", ""), path
+    _, separator, port = address.rpartition(":")
+    if not separator or not port.isdigit() or port == "0":
+        raise ValueError(f"{path.name}: no running HTTP address found; start the node first")
+    return int(port), source
+
+
+def admin_url(path, config, output=None):
+    """Loopback URL of a node's admin HTTP server (AdminAddress may be 0.0.0.0)."""
+    return f"http://127.0.0.1:{admin_port(path, config, output)[0]}"
+
+
+def allowed_exit(code, config):
+    return code == 0 or (config["Behavior"] == "crashed_proposer" and code == CRASH_EXIT_CODE)
+
+
+def start_nodes(binary, configs):
+    """Start one node process per (path, config, output) entry."""
+    return [subprocess.Popen([str(binary), "-config", str(path)], cwd=REPO) for path, _, _ in configs]
+
+
+def interrupt_processes(processes, seconds=8):
+    """Graceful stop: SIGINT lets nodes close LevelDB and write result.json."""
+    for process in processes:
+        if process.poll() is None:
+            process.send_signal(signal.SIGINT)
+    deadline = time.monotonic() + seconds
+    for process in processes:
+        try:
+            process.wait(timeout=max(0.1, deadline - time.monotonic()))
+        except subprocess.TimeoutExpired:
+            process.kill()
+            process.wait()
+
+
 def require_fresh_output(configs):
     """Only nodes about to start must have fresh outputs, not their peers."""
     for _, config, output in configs:
@@ -125,7 +176,7 @@ def run_one_node(binary, path, expected_crash=False):
             except subprocess.TimeoutExpired:
                 pass
             raise
-        if code and not (expected_crash and code == 86):
+        if code and not (expected_crash and code == CRASH_EXIT_CODE):
             raise RuntimeError(f"Node exited with code {code}.")
     finally:
         stop_processes([process])
@@ -168,8 +219,7 @@ def run_cluster(binary, configs):
     try:
         duration = max(c[1]["RunForMS"] for c in configs)
         deadline = time.monotonic() + duration / 1000 + 20 if duration else None
-        for path, _, _ in configs:
-            processes.append(subprocess.Popen([str(binary), "-config", str(path)], cwd=REPO))
+        processes.extend(start_nodes(binary, configs))
         pending = set(range(len(processes)))
         while pending:
             for index in tuple(pending):
@@ -178,8 +228,7 @@ def run_cluster(binary, configs):
                 if code is None:
                     continue
                 pending.remove(index)
-                config = configs[index][1]
-                if code and not (config["Behavior"] == "crashed_proposer" and code == 86):
+                if not allowed_exit(code, configs[index][1]):
                     raise RuntimeError(f"Node PID {process.pid} exited with code {code}.")
             if pending and deadline is not None and time.monotonic() >= deadline:
                 raise RuntimeError(f"Cluster exceeded its shutdown deadline; inspect events.jsonl in {directory}.")
@@ -245,7 +294,7 @@ def main():
     directory = args.config_dir.resolve()
     configs = load_configs(directory)
     print(f"Config directory: {directory}", flush=True)
-    binary = REPO / "local-runs" / ("node.exe" if os.name == "nt" else "node")
+    binary = binary_path()
     if args.node is not None:
         selected = [entry for entry in configs if entry[1]["NodeID"] == args.node]
         if not selected:

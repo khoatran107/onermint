@@ -8,6 +8,7 @@ import (
 	"path/filepath"
 
 	crypt "blockchain-lab01/src/crypto"
+	"blockchain-lab01/src/mempool"
 )
 
 const (
@@ -16,6 +17,7 @@ const (
 	adminPortShift  = 2 * portRangeSize
 )
 
+// MempoolSettings are the cluster-wide mempool flags written to network.json.
 type MempoolSettings struct {
 	TTLMS        uint64
 	AccountSlots int
@@ -24,9 +26,13 @@ type MempoolSettings struct {
 	GlobalQueue  int
 }
 
+func (m MempoolSettings) limits() mempool.Limits {
+	return mempool.Limits{AccountSlots: m.AccountSlots, AccountQueue: m.AccountQueue, GlobalSlots: m.GlobalSlots, GlobalQueue: m.GlobalQueue}
+}
+
 // Generate creates a fresh local development cluster. Key randomness is always
 // crypto/rand through GenerateIdentity, independently of Faults.Seed.
-func Generate(dir, outputRoot string, faultTolerance, basePort int, runMS uint64, faults Policy, mempool MempoolSettings) error {
+func Generate(dir, outputRoot string, faultTolerance, basePort int, runMS uint64, faults Policy, pool MempoolSettings) error {
 	count := 3*faultTolerance + 1
 	if faultTolerance < 3 || count > portRangeSize || basePort < 1024 || basePort+adminPortShift+count-1 > 65535 {
 		return fmt.Errorf("invalid cluster size or ports")
@@ -37,7 +43,7 @@ func Generate(dir, outputRoot string, faultTolerance, basePort int, runMS uint64
 	if err := faults.Validate(); err != nil {
 		return err
 	}
-	if mempool.TTLMS == 0 || mempool.AccountSlots < 1 || mempool.AccountQueue < 1 || mempool.GlobalSlots < mempool.AccountSlots || mempool.GlobalQueue < mempool.AccountQueue {
+	if pool.TTLMS == 0 || pool.limits().Validate() != nil {
 		return fmt.Errorf("invalid mempool settings")
 	}
 	if err := os.Mkdir(dir, 0700); err != nil {
@@ -55,21 +61,10 @@ func Generate(dir, outputRoot string, faultTolerance, basePort int, runMS uint64
 		}
 		peers = append(peers, Peer{Address: fmt.Sprintf("127.0.0.1:%d", basePort+i), PublicKey: hex.EncodeToString(pub[:]), GossipAddress: fmt.Sprintf("127.0.0.1:%d", basePort+gossipPortShift+i)})
 	}
-	shared := struct {
-		ChainID        string
-		F              int
-		Peers          []Peer
-		MinBlockTXs    int
-		BlockMaxWaitMS uint64
-		BaseTimeoutMS  uint64
-		MaxBlockTXs    int
-		MaxBlockBytes  int
-		MempoolTTLMS   uint64
-		AccountSlots   int
-		AccountQueue   int
-		GlobalSlots    int
-		GlobalQueue    int
-	}{"lab01-local", faultTolerance, peers, 3, 2000, 2000, 128, (4 << 20) - (16 << 10), mempool.TTLMS, mempool.AccountSlots, mempool.AccountQueue, mempool.GlobalSlots, mempool.GlobalQueue}
+	shared := NetworkFile{ChainID: DefaultChainID, F: faultTolerance, Peers: peers,
+		MinBlockTXs: DefaultMinBlockTXs, BlockMaxWaitMS: DefaultBlockMaxWaitMS, BaseTimeoutMS: DefaultBaseTimeoutMS,
+		MaxBlockTXs: DefaultMaxBlockTXs, MaxBlockBytes: MaxBlockBytes, MempoolTTLMS: pool.TTLMS,
+		AccountSlots: pool.AccountSlots, AccountQueue: pool.AccountQueue, GlobalSlots: pool.GlobalSlots, GlobalQueue: pool.GlobalQueue}
 	b, err := json.MarshalIndent(shared, "", "  ")
 	if err != nil {
 		return err
@@ -89,7 +84,7 @@ func Generate(dir, outputRoot string, faultTolerance, basePort int, runMS uint64
 			SendGapMS    uint64
 			RunForMS     uint64  `json:",omitempty"`
 			Faults       *Policy `json:",omitempty"`
-		}{NodeID: i, NetworkFile: "network.json", OutputDir: filepath.Join(outputRoot, fmt.Sprintf("node-%02d", i)), Behavior: "honest", AdminAddress: fmt.Sprintf("0.0.0.0:%d", basePort+adminPortShift+i), SendGapMS: 1, RunForMS: runMS}
+		}{NodeID: i, NetworkFile: "network.json", OutputDir: filepath.Join(outputRoot, fmt.Sprintf("node-%02d", i)), Behavior: "honest", AdminAddress: fmt.Sprintf("0.0.0.0:%d", basePort+adminPortShift+i), SendGapMS: DefaultSendGapMS, RunForMS: runMS}
 		if faults != (Policy{}) && faults != (Policy{Seed: 1}) {
 			c.Faults = &policy
 		}

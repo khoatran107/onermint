@@ -27,7 +27,7 @@ func txWithSeed(t *testing.T, nonce uint64, seed byte) types.Transaction {
 	return v
 }
 func TestPoolOrderingReplayAndIsolation(t *testing.T) {
-	p := mempool.New(20, 20, 10, 10, 20000, 2000)
+	p := mempool.New(mempool.Limits{GlobalSlots: 20, GlobalQueue: 20, AccountSlots: 10, AccountQueue: 10, MempoolBytes: 20000, MaxTxBytes: 2000})
 	var s state.State
 	third, first, second := tx(t, 3), tx(t, 1), tx(t, 2)
 	if _, err := p.Admit("pool", s, third); err != nil {
@@ -93,13 +93,13 @@ func TestPoolRejectsBadAndBoundedInputs(t *testing.T) {
 					t.Fatal(err)
 				}
 			}
-			p := mempool.New(10, 10, 5, 5, 20000, 2000)
+			p := mempool.New(mempool.Limits{GlobalSlots: 10, GlobalQueue: 10, AccountSlots: 5, AccountQueue: 5, MempoolBytes: 20000, MaxTxBytes: 2000})
 			if _, err := p.Admit("pool", s, v); err == nil || p.Len() != 0 {
 				t.Fatal("bad transaction entered pool")
 			}
 		})
 	}
-	p := mempool.New(1, 1, 1, 1, 2000, 2000)
+	p := mempool.New(mempool.Limits{GlobalSlots: 1, GlobalQueue: 1, AccountSlots: 1, AccountQueue: 1, MempoolBytes: 2000, MaxTxBytes: 2000})
 	if _, err := p.Admit("pool", s, tx(t, 1)); err != nil {
 		t.Fatal(err)
 	}
@@ -115,7 +115,7 @@ func TestPoolRejectsBadAndBoundedInputs(t *testing.T) {
 }
 
 func TestSnapshotIsOrderedAndIsolated(t *testing.T) {
-	p := mempool.New(10, 10, 5, 5, 20000, 2000)
+	p := mempool.New(mempool.Limits{GlobalSlots: 10, GlobalQueue: 10, AccountSlots: 5, AccountQueue: 5, MempoolBytes: 20000, MaxTxBytes: 2000})
 	var s state.State
 	for _, nonce := range []uint64{3, 1, 2} {
 		if _, err := p.Admit("pool", s, tx(t, nonce)); err != nil {
@@ -133,7 +133,7 @@ func TestSnapshotIsOrderedAndIsolated(t *testing.T) {
 }
 
 func TestAccountSlotsQueueAndEvictionReleaseCapacity(t *testing.T) {
-	p := mempool.New(4, 2, 2, 1, 20000, 2000)
+	p := mempool.New(mempool.Limits{GlobalSlots: 4, GlobalQueue: 2, AccountSlots: 2, AccountQueue: 1, MempoolBytes: 20000, MaxTxBytes: 2000})
 	var s state.State
 	first, second, third, fourth := tx(t, 1), tx(t, 2), tx(t, 3), tx(t, 4)
 	firstID, err := p.Admit("pool", s, first)

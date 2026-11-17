@@ -3,7 +3,6 @@ package realnet
 import (
 	"bytes"
 	"context"
-	"crypto/ed25519"
 	"fmt"
 	"io"
 	"sync"
@@ -38,19 +37,17 @@ func pause(ctx context.Context, delay time.Duration) bool {
 }
 
 func (p *process) hello(peer int) (*pb.Envelope, error) {
-	e := &pb.Envelope{ChainId: p.cfg.ChainID, Sender: uint32(p.cfg.NodeID), Recipient: uint32(peer), Kind: "hello", Reference: make([]byte, 32), Payload: membershipBytes(p.cfg)}
-	b, err := TransportBytes(e)
-	if err != nil {
+	e := &pb.Envelope{ChainId: p.cfg.ChainID, Sender: uint32(p.cfg.NodeID), Recipient: uint32(peer), Kind: string(network.Hello), Reference: make([]byte, 32), Payload: membershipBytes(p.cfg)}
+	if err := p.signEnvelope(e); err != nil {
 		return nil, err
 	}
-	e.Signature = ed25519.Sign(p.key, b)
 	return e, nil
 }
 func (p *process) verifyHello(e *pb.Envelope) error {
 	if err := VerifyEnvelope(p.cfg.ChainID, p.cfg.NodeID, p.ids, e); err != nil {
 		return err
 	}
-	if e.Kind != "hello" || int(e.Sender) == p.cfg.NodeID || !bytes.Equal(e.Payload, membershipBytes(p.cfg)) {
+	if e.Kind != string(network.Hello) || int(e.Sender) == p.cfg.NodeID || !bytes.Equal(e.Payload, membershipBytes(p.cfg)) {
 		return fmt.Errorf("stream handshake requires matching fixed membership")
 	}
 	return nil
@@ -68,7 +65,7 @@ func (p *process) installSession(peer int, s *peerSession) bool {
 		return false
 	}
 	p.sessions[peer] = s
-	p.Record(network.Event{Node: p.cfg.NodeID, Peer: peer, Event: "stream_open"})
+	p.event(peer, network.Event{Event: "stream_open"})
 	return true
 }
 func (p *process) removeSession(peer int, s *peerSession) {
@@ -78,7 +75,27 @@ func (p *process) removeSession(peer int, s *peerSession) {
 		delete(p.sessions, peer)
 	}
 	p.sessionMu.Unlock()
-	p.Record(network.Event{Node: p.cfg.NodeID, Peer: peer, Event: "stream_close"})
+	p.event(peer, network.Event{Event: "stream_close"})
+}
+
+// openSession installs an authenticated stream as the session for peer and
+// starts its reader. It returns nil if a session for peer already exists.
+// The session is removed when its reader stops.
+func (p *process) openSession(ctx context.Context, cancel context.CancelFunc, peer int, send func(*pb.Envelope) error, recv func() (*pb.Envelope, error)) *peerSession {
+	s := &peerSession{send: send, done: make(chan struct{}), cancel: cancel}
+	if !p.installSession(peer, s) {
+		s.close()
+		return nil
+	}
+	p.streamWG.Add(1)
+	go func() {
+		defer p.streamWG.Done()
+		defer p.removeSession(peer, s)
+		if err := p.readStream(ctx, peer, recv); err != nil && err != io.EOF && ctx.Err() == nil {
+			p.event(peer, network.Event{Event: "stream_error", Reason: err.Error()})
+		}
+	}()
+	return s
 }
 
 func (p *process) readStream(ctx context.Context, peer int, recv func() (*pb.Envelope, error)) error {
@@ -87,13 +104,13 @@ func (p *process) readStream(ctx context.Context, peer int, recv func() (*pb.Env
 		if err != nil {
 			return err
 		}
-		if e.Kind == "hello" || int(e.Sender) != peer || e.Recipient != uint32(p.cfg.NodeID) {
+		if e.Kind == string(network.Hello) || int(e.Sender) != peer || e.Recipient != uint32(p.cfg.NodeID) {
 			return fmt.Errorf("frame does not belong to authenticated stream peer")
 		}
 		if err = p.acceptFrame(ctx, e); err != nil {
 			return err
 		}
-		p.Record(network.Event{Node: p.cfg.NodeID, Peer: peer, Event: "stream_receive", Type: network.Kind(e.Kind), Height: e.Height, Round: e.Round, Packet: e.Sequence})
+		p.event(peer, network.Event{Event: "stream_receive", Type: network.Kind(e.Kind), Height: e.Height, Round: e.Round, Packet: e.Sequence})
 	}
 }
 
@@ -106,7 +123,7 @@ func (p *process) Exchange(stream grpc.BidiStreamingServer[pb.Envelope, pb.Envel
 		return err
 	}
 	if err = p.verifyHello(hello); err != nil {
-		p.Record(network.Event{Node: p.cfg.NodeID, Peer: int(hello.Sender), Event: "reject_handshake", Reason: err.Error()})
+		p.event(int(hello.Sender), network.Event{Event: "reject_handshake", Reason: err.Error()})
 		return status.Error(codes.PermissionDenied, err.Error())
 	}
 	peer := int(hello.Sender)
@@ -118,20 +135,12 @@ func (p *process) Exchange(stream grpc.BidiStreamingServer[pb.Envelope, pb.Envel
 		return err
 	}
 	ctx, cancel := context.WithCancel(stream.Context())
-	s := &peerSession{send: stream.Send, done: make(chan struct{}), cancel: cancel}
-	if !p.installSession(peer, s) {
-		s.close()
+	s := p.openSession(ctx, cancel, peer, stream.Send, stream.Recv)
+	if s == nil {
 		return status.Error(codes.AlreadyExists, "peer session already active")
 	}
-	defer p.removeSession(peer, s)
-	p.streamWG.Add(1)
-	go func() {
-		defer p.streamWG.Done()
-		if err := p.readStream(ctx, peer, stream.Recv); err != nil && err != io.EOF && ctx.Err() == nil {
-			p.Record(network.Event{Node: p.cfg.NodeID, Peer: peer, Event: "stream_error", Reason: err.Error()})
-		}
-		s.close()
-	}()
+	// Stop writers before the handler returns; the reader then removes it.
+	defer s.close()
 	select {
 	case <-ctx.Done():
 		return nil
@@ -169,32 +178,19 @@ func (p *process) dialSession(peer int, conn *grpc.ClientConn) *peerSession {
 		cancel()
 		return nil
 	}
-	s := &peerSession{send: stream.Send, done: make(chan struct{}), cancel: cancel}
-	if !p.installSession(peer, s) {
-		s.close()
-		return nil
-	}
-	p.streamWG.Add(1)
-	go func() {
-		defer p.streamWG.Done()
-		defer p.removeSession(peer, s)
-		if err := p.readStream(ctx, peer, stream.Recv); err != nil && err != io.EOF && ctx.Err() == nil {
-			p.Record(network.Event{Node: p.cfg.NodeID, Peer: peer, Event: "stream_error", Reason: err.Error()})
-		}
-	}()
-	return s
+	return p.openSession(ctx, cancel, peer, stream.Send, stream.Recv)
 }
 
 func (p *process) sendPeer(peer int, jobs <-chan *pb.Envelope, wg *sync.WaitGroup) {
 	defer wg.Done()
-	conn, err := grpc.NewClient(p.cfg.Peers[peer].Address, grpc.WithTransportCredentials(insecure.NewCredentials()), grpc.WithDefaultCallOptions(grpc.MaxCallRecvMsgSize(4<<20), grpc.MaxCallSendMsgSize(4<<20)))
+	conn, err := grpc.NewClient(p.cfg.Peers[peer].Address, grpc.WithTransportCredentials(insecure.NewCredentials()), grpc.WithDefaultCallOptions(grpc.MaxCallRecvMsgSize(maxFrameBytes), grpc.MaxCallSendMsgSize(maxFrameBytes)))
 	if err != nil {
-		p.Record(network.Event{Node: p.cfg.NodeID, Peer: peer, Event: "connection_error", Reason: err.Error()})
+		p.event(peer, network.Event{Event: "connection_error", Reason: err.Error()})
 		return
 	}
 	defer func() {
 		if err := conn.Close(); err != nil {
-			p.Record(network.Event{Node: p.cfg.NodeID, Peer: peer, Event: "close_error", Reason: err.Error()})
+			p.event(peer, network.Event{Event: "close_error", Reason: err.Error()})
 		}
 	}()
 	for p.ctx.Err() == nil {

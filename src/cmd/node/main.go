@@ -64,7 +64,7 @@ func main() {
 	if err != nil {
 		fmt.Fprintln(os.Stderr, err)
 		if errors.Is(err, runtime.ErrCrash) {
-			os.Exit(86)
+			os.Exit(runtime.CrashExitCode)
 		}
 		os.Exit(1)
 	}

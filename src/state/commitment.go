@@ -1,7 +1,6 @@
 package state
 
 import (
-	"bytes"
 	"encoding/binary"
 	"fmt"
 	"math"
@@ -42,7 +41,7 @@ func (s State) CanonicalLeaves() ([][]byte, error) {
 	for sender := range s.nonces {
 		senders = append(senders, sender)
 	}
-	sort.Slice(senders, func(i, j int) bool { return bytes.Compare(senders[i][:], senders[j][:]) < 0 })
+	sort.Slice(senders, func(i, j int) bool { return types.ComparePublicKey(senders[i], senders[j]) < 0 })
 	for _, sender := range senders {
 		payload := append([]byte{1}, sender[:]...)
 		payload = binary.BigEndian.AppendUint64(payload, s.nonces[sender])
@@ -85,10 +84,10 @@ func merkleHash(leaves [][]byte) types.Hash {
 // The count prevents duplicate-last padding from hiding a different tree size.
 // This implements commitments only, not membership/non-membership proofs.
 func (s State) Root(chainID string) (types.Hash, error) {
-	if chainID == "" || !utf8.ValidString(chainID) {
-		return types.Hash{}, fmt.Errorf("invalid chain ID")
+	if err := crypt.ValidateChainID(chainID); err != nil {
+		return types.Hash{}, err
 	}
-	context := "STATE-MERKLE:" + chainID
+	context := crypt.DomainStateMerkle + ":" + chainID
 	if uint64(len(context)) > math.MaxUint32 {
 		return types.Hash{}, fmt.Errorf("state context exceeds uint32 length")
 	}

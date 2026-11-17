@@ -5,7 +5,6 @@ package block
 import (
 	"crypto/ed25519"
 	"fmt"
-	"unicode/utf8"
 
 	crypt "blockchain-lab01/src/crypto"
 	"blockchain-lab01/src/state"
@@ -23,8 +22,8 @@ type Context struct {
 }
 
 func (c Context) validate() error {
-	if c.ChainID == "" || !utf8.ValidString(c.ChainID) {
-		return fmt.Errorf("invalid chain ID")
+	if err := crypt.ValidateChainID(c.ChainID); err != nil {
+		return err
 	}
 	if c.Height == 0 {
 		return fmt.Errorf("height must start at 1")
@@ -62,11 +61,7 @@ func Build(c Context, initial state.State, txs []types.Transaction, key ed25519.
 	if err := c.validate(); err != nil {
 		return types.Block{}, err
 	}
-	body := types.BlockBody{Transactions: make([]types.Transaction, len(txs))}
-	for i, tx := range txs {
-		body.Transactions[i] = tx
-		body.Transactions[i].Value = append([]byte(nil), tx.Value...)
-	}
+	body := types.BlockBody{Transactions: txs}.Clone()
 	next, err := state.Execute(c.ChainID, initial, body.Transactions)
 	if err != nil {
 		return types.Block{}, err
@@ -92,6 +87,13 @@ func Validate(c Context, initial state.State, b types.Block) (state.State, error
 	if err := ValidateHeader(c, b.Header); err != nil {
 		return initial, err
 	}
+	return ValidateBody(c, initial, b)
+}
+
+// ValidateBody is Validate for a header that the caller has already checked
+// with ValidateHeader under the same Context: it verifies the body commitment,
+// executes the transactions and compares the resulting state root.
+func ValidateBody(c Context, initial state.State, b types.Block) (state.State, error) {
 	bodyHash, err := crypt.BodyHash(c.ChainID, b.Body)
 	if err != nil {
 		return initial, err

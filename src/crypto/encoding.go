@@ -13,45 +13,98 @@ import (
 
 const encodingVersion byte = 1
 
-type encoder struct {
+// Signing/hashing domains. Each payload starts with "<domain>:<chain ID>" so a
+// signature valid in one context never validates in another.
+const (
+	DomainTx          = "TX"
+	DomainHeader      = "HEADER"
+	DomainVote        = "VOTE"
+	DomainBody        = "BODY"
+	DomainProposal    = "PROPOSAL"
+	DomainTransport   = "TRANSPORT"
+	DomainStateMerkle = "STATE-MERKLE"
+)
+
+// ValidateChainID is the one chain-ID rule: nonempty valid UTF-8.
+func ValidateChainID(chainID string) error {
+	if chainID == "" || !utf8.ValidString(chainID) {
+		return fmt.Errorf("invalid chain ID")
+	}
+	return nil
+}
+
+// Encoder builds canonical bytes: version byte, uint32-length-prefixed
+// "<domain>:<chain>" context, then fields. Integers are big-endian;
+// strings/blobs carry a uint32 length; fixed arrays have no prefix. The first
+// error sticks and is returned by Bytes.
+type Encoder struct {
 	data []byte
 	err  error
 }
 
-func (e *encoder) u64(v uint64) { e.data = binary.BigEndian.AppendUint64(e.data, v) }
-func (e *encoder) blob(v []byte) {
-	if uint64(len(v)) > math.MaxUint32 {
-		e.err = fmt.Errorf("field exceeds uint32 length")
-		return
-	}
-	e.data = binary.BigEndian.AppendUint32(e.data, uint32(len(v)))
-	e.data = append(e.data, v...)
-}
-func (e *encoder) str(v string) {
-	if !utf8.ValidString(v) {
-		e.err = fmt.Errorf("string is not valid UTF-8")
-		return
-	}
-	e.blob([]byte(v))
-}
-func newEncoder(domain, chainID string) *encoder {
-	e := &encoder{data: []byte{encodingVersion}}
+func NewEncoder(domain, chainID string) *Encoder {
+	e := &Encoder{data: []byte{encodingVersion}}
 	if chainID == "" {
 		e.err = fmt.Errorf("empty chain ID")
 	}
-	e.str(domain + ":" + chainID)
+	e.Str(domain + ":" + chainID)
 	return e
 }
 
-// CanonicalTxBytes excludes the signature. Strings/blobs have uint32 byte
-// lengths; integers are big-endian uint64; fixed arrays have no length prefix.
+func (e *Encoder) Byte(v byte)    { e.data = append(e.data, v) }
+func (e *Encoder) Fixed(v []byte) { e.data = append(e.data, v...) }
+func (e *Encoder) U32(v uint32)   { e.data = binary.BigEndian.AppendUint32(e.data, v) }
+func (e *Encoder) U64(v uint64)   { e.data = binary.BigEndian.AppendUint64(e.data, v) }
+func (e *Encoder) Bool(v bool) {
+	if v {
+		e.Byte(1)
+	} else {
+		e.Byte(0)
+	}
+}
+
+// Count writes a uint32 element count.
+func (e *Encoder) Count(n int) {
+	if uint64(n) > math.MaxUint32 {
+		e.fail(fmt.Errorf("count exceeds uint32"))
+		return
+	}
+	e.U32(uint32(n))
+}
+
+func (e *Encoder) Blob(v []byte) {
+	if uint64(len(v)) > math.MaxUint32 {
+		e.fail(fmt.Errorf("field exceeds uint32 length"))
+		return
+	}
+	e.U32(uint32(len(v)))
+	e.data = append(e.data, v...)
+}
+
+func (e *Encoder) Str(v string) {
+	if !utf8.ValidString(v) {
+		e.fail(fmt.Errorf("string is not valid UTF-8"))
+		return
+	}
+	e.Blob([]byte(v))
+}
+
+func (e *Encoder) fail(err error) {
+	if e.err == nil {
+		e.err = err
+	}
+}
+
+func (e *Encoder) Bytes() ([]byte, error) { return e.data, e.err }
+
+// CanonicalTxBytes excludes the signature.
 func CanonicalTxBytes(tx types.Transaction) ([]byte, error) {
-	e := newEncoder("TX", tx.ChainID)
-	e.data = append(e.data, tx.Sender[:]...)
-	e.str(tx.TargetKey)
-	e.blob(tx.Value)
-	e.u64(tx.Nonce)
-	return e.data, e.err
+	e := NewEncoder(DomainTx, tx.ChainID)
+	e.Fixed(tx.Sender[:])
+	e.Str(tx.TargetKey)
+	e.Blob(tx.Value)
+	e.U64(tx.Nonce)
+	return e.Bytes()
 }
 
 // CanonicalSignedTxBytes appends the fixed 64-byte signature to its payload.
@@ -64,13 +117,13 @@ func CanonicalSignedTxBytes(tx types.Transaction) ([]byte, error) {
 }
 
 func CanonicalHeaderBytes(h types.BlockHeader) ([]byte, error) {
-	e := newEncoder("HEADER", h.ChainID)
-	e.u64(h.Height)
-	e.data = append(e.data, h.ParentHash[:]...)
-	e.data = append(e.data, h.BodyHash[:]...)
-	e.data = append(e.data, h.StateRoot[:]...)
-	e.data = append(e.data, h.Proposer[:]...)
-	return e.data, e.err
+	e := NewEncoder(DomainHeader, h.ChainID)
+	e.U64(h.Height)
+	e.Fixed(h.ParentHash[:])
+	e.Fixed(h.BodyHash[:])
+	e.Fixed(h.StateRoot[:])
+	e.Fixed(h.Proposer[:])
+	return e.Bytes()
 }
 
 func CanonicalVoteBytes(v types.Vote) ([]byte, error) {
@@ -80,26 +133,22 @@ func CanonicalVoteBytes(v types.Vote) ([]byte, error) {
 	if v.IsNil != (v.BlockHash == (types.Hash{})) {
 		return nil, fmt.Errorf("inconsistent NIL vote and block hash")
 	}
-	e := newEncoder("VOTE", v.ChainID)
-	e.u64(v.Height)
-	e.u64(v.Round)
-	e.data = append(e.data, byte(v.Phase))
-	e.data = append(e.data, v.Validator[:]...)
-	if v.IsNil {
-		e.data = append(e.data, 1)
-	} else {
-		e.data = append(e.data, 0)
-	}
-	e.data = append(e.data, v.BlockHash[:]...)
-	return e.data, e.err
+	e := NewEncoder(DomainVote, v.ChainID)
+	e.U64(v.Height)
+	e.U64(v.Round)
+	e.Byte(byte(v.Phase))
+	e.Fixed(v.Validator[:])
+	e.Bool(v.IsNil)
+	e.Fixed(v.BlockHash[:])
+	return e.Bytes()
 }
 
 func CanonicalBodyBytes(chainID string, body types.BlockBody) ([]byte, error) {
-	e := newEncoder("BODY", chainID)
+	e := NewEncoder(DomainBody, chainID)
 	if uint64(len(body.Transactions)) > math.MaxUint32 {
 		return nil, fmt.Errorf("too many transactions")
 	}
-	e.data = binary.BigEndian.AppendUint32(e.data, uint32(len(body.Transactions)))
+	e.Count(len(body.Transactions))
 	for _, tx := range body.Transactions {
 		if tx.ChainID != chainID {
 			return nil, fmt.Errorf("body transaction chain mismatch")
@@ -108,8 +157,8 @@ func CanonicalBodyBytes(chainID string, body types.BlockBody) ([]byte, error) {
 		if err != nil {
 			return nil, err
 		}
-		e.blob(payload)
-		e.data = append(e.data, tx.Signature[:]...)
+		e.Blob(payload)
+		e.Fixed(tx.Signature[:])
 	}
-	return e.data, e.err
+	return e.Bytes()
 }

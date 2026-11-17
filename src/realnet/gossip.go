@@ -99,14 +99,14 @@ func (p *process) newGossip() (*gossipNetwork, error) {
 	cleanup := func(err error) (*gossipNetwork, error) { _ = h.Close(); return nil, err }
 	params := pubsub.DefaultGossipSubParams()
 	params.HeartbeatInterval = 200 * time.Millisecond
-	ps, err := pubsub.NewGossipSub(p.ctx, h, pubsub.WithGossipSubParams(params), pubsub.WithMaxMessageSize(4<<20))
+	ps, err := pubsub.NewGossipSub(p.ctx, h, pubsub.WithGossipSubParams(params), pubsub.WithMaxMessageSize(maxFrameBytes))
 	if err != nil {
 		return cleanup(err)
 	}
 	name := fmt.Sprintf("/lab01/2/%x", membershipBytes(p.cfg))
 	if err = ps.RegisterTopicValidator(name, func(_ context.Context, _ peer.ID, msg *pubsub.Message) bool {
 		var e pb.Envelope
-		if proto.Unmarshal(msg.Data, &e) != nil || e.Recipient != ^uint32(0) || int(e.Sender) >= len(g.peers) {
+		if proto.Unmarshal(msg.Data, &e) != nil || e.Recipient != broadcastRecipient || int(e.Sender) >= len(g.peers) {
 			return false
 		}
 		if msg.GetFrom() != g.peers[e.Sender].ID || VerifyEnvelope(p.cfg.ChainID, p.cfg.NodeID, p.ids, &e) != nil {
@@ -126,7 +126,7 @@ func (p *process) newGossip() (*gossipNetwork, error) {
 		_ = g.topic.Close()
 		return cleanup(err)
 	}
-	p.Record(network.Event{Node: p.cfg.NodeID, Peer: -1, Event: "membership", Reason: fmt.Sprintf("sha256=%x gossip=%s peer_id=%s", membershipBytes(p.cfg), p.cfg.Peers[p.cfg.NodeID].GossipAddress, h.ID())})
+	p.event(-1, network.Event{Event: "membership", Reason: fmt.Sprintf("sha256=%x gossip=%s peer_id=%s", membershipBytes(p.cfg), p.cfg.Peers[p.cfg.NodeID].GossipAddress, h.ID())})
 	go g.read()
 	return g, nil
 }
@@ -145,9 +145,9 @@ func (g *gossipNetwork) read() {
 		if !ok {
 			continue
 		} // Only topic-authenticated messages reach the owner loop.
-		g.p.Record(network.Event{Node: g.p.cfg.NodeID, Peer: int(e.Sender), Event: "gossip_receive", Type: network.Kind(e.Kind), Height: e.Height, Round: e.Round, Packet: e.Sequence, Reason: "via=" + msg.ReceivedFrom.String()})
+		g.p.event(int(e.Sender), network.Event{Event: "gossip_receive", Type: network.Kind(e.Kind), Height: e.Height, Round: e.Round, Packet: e.Sequence, Reason: "via=" + msg.ReceivedFrom.String()})
 		if err := g.p.enqueueVerified(g.p.ctx, e); err != nil && g.p.ctx.Err() == nil {
-			g.p.Record(network.Event{Node: g.p.cfg.NodeID, Peer: int(e.Sender), Event: "gossip_reject", Reason: err.Error()})
+			g.p.event(int(e.Sender), network.Event{Event: "gossip_reject", Reason: err.Error()})
 		}
 	}
 }
@@ -181,7 +181,7 @@ func (g *gossipNetwork) connect() {
 					err := g.host.Connect(ctx, info)
 					cancel()
 					if err == nil {
-						g.p.Record(network.Event{Node: g.p.cfg.NodeID, Peer: i, Event: "gossip_connect"})
+						g.p.event(i, network.Event{Event: "gossip_connect"})
 					}
 				}
 				if !pause(g.p.ctx, 300*time.Millisecond) {

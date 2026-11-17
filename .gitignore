@@ -35,8 +35,10 @@ go.work.sum
 # Project file
 Lab01.pdf
 
-# Generated local clusters contain private keys and runtime output.
+# Runtime output (LevelDB, logs, results). Note: config/*/key-*.hex and
+# client-key.hex ARE committed on purpose: they are test-only keys so that the
+# T1-T8 scenarios rerun with identical identities. Never reuse them elsewhere.
 /local-runs/
 __pycache__/
-# scripted client test wallets (private keys)
+# tests/scripted_client.py wallets (private keys)
 tests/wallets/

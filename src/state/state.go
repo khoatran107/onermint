@@ -2,13 +2,11 @@
 package state
 
 import (
-	"bytes"
 	"encoding/hex"
 	"fmt"
 	"math"
 	"sort"
 	"strings"
-	"unicode/utf8"
 
 	crypt "blockchain-lab01/src/crypto"
 	"blockchain-lab01/src/types"
@@ -53,7 +51,7 @@ func (s State) Snapshot() Snapshot {
 		out.Accounts = append(out.Accounts, AccountSnapshot{Sender: sender, Nonce: nonce})
 	}
 	sort.Slice(out.Records, func(i, j int) bool { return out.Records[i].Key < out.Records[j].Key })
-	sort.Slice(out.Accounts, func(i, j int) bool { return bytes.Compare(out.Accounts[i].Sender[:], out.Accounts[j].Sender[:]) < 0 })
+	sort.Slice(out.Accounts, func(i, j int) bool { return types.ComparePublicKey(out.Accounts[i].Sender, out.Accounts[j].Sender) < 0 })
 	return out
 }
 
@@ -72,8 +70,8 @@ func (s State) clone() State {
 // original snapshot, not a partially applied batch. Even successful execution
 // is only a candidate state; consensus must later decide whether to commit it.
 func Execute(chainID string, initial State, txs []types.Transaction) (State, error) {
-	if chainID == "" || !utf8.ValidString(chainID) {
-		return initial, fmt.Errorf("invalid chain ID")
+	if err := crypt.ValidateChainID(chainID); err != nil {
+		return initial, err
 	}
 	next := initial.clone()
 	for i, tx := range txs {

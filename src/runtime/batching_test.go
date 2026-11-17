@@ -1,6 +1,7 @@
 package runtime
 
 import (
+	"blockchain-lab01/src/mempool"
 	"bytes"
 	"crypto/ed25519"
 	"encoding/hex"
@@ -31,7 +32,8 @@ func (p *batchTestPort) Schedule(delay uint64, call func() error) error {
 }
 
 func TestBatchEligibility(t *testing.T) {
-	node := Runtime{minBlockTXs: 3}
+	var node Runtime
+	node.blocks.MinBlockTXs = 3
 	if node.batchEligible([]types.Transaction{{}, {}}) {
 		t.Fatal("proposed before reaching MinBlockTXs")
 	}
@@ -151,9 +153,9 @@ func newBatchRuntime(t *testing.T) (*Runtime, *batchTestPort, ed25519.PrivateKey
 		ID: 0, ChainID: "batch-test", F: 3, Validators: validators, PrivateKey: keys[0],
 		BaseTimeout: 100, RetryInterval: 50, TargetHeights: 1, BlockMaxWait: 777,
 		MempoolTTL: 1_234,
-		Store:      store, MempoolBytes: 1 << 20, MaxTxBytes: 1 << 16,
-		AccountSlots: 16, AccountQueue: 64, GlobalSlots: 1024, GlobalQueue: 256,
-		MinBlockTXs: 3, MaxBlockTXs: 10, MaxBlockBytes: 1 << 20,
+		Store:      store,
+		Mempool:    mempool.Limits{MempoolBytes: 1 << 20, MaxTxBytes: 1 << 16, AccountSlots: 16, AccountQueue: 64, GlobalSlots: 1024, GlobalQueue: 256},
+		Blocks:     BlockLimits{MinBlockTXs: 3, MaxBlockTXs: 10, MaxBlockBytes: 1 << 20},
 	}, port)
 	if err != nil {
 		t.Fatal(err)

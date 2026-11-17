@@ -1,10 +1,8 @@
-// Package node owns blockchain message handling independently of gRPC IO.
+// Package runtime owns blockchain message handling independently of gRPC IO:
+// it drives the consensus engine, the mempool and header/body dissemination.
 package runtime
 
 import (
-	"blockchain-lab01/src/ledger"
-	"blockchain-lab01/src/mempool"
-	"blockchain-lab01/src/state"
 	"crypto/ed25519"
 	"encoding/hex"
 	"encoding/json"
@@ -13,7 +11,10 @@ import (
 
 	cons "blockchain-lab01/src/consensus"
 	crypt "blockchain-lab01/src/crypto"
+	"blockchain-lab01/src/ledger"
+	"blockchain-lab01/src/mempool"
 	"blockchain-lab01/src/network"
+	"blockchain-lab01/src/state"
 	"blockchain-lab01/src/types"
 )
 
@@ -25,23 +26,31 @@ type Port interface {
 	Schedule(uint64, func() error) error
 	Record(network.Event)
 }
+
+// BlockLimits bounds proposed blocks. A proposer waits for MinBlockTXs pending
+// transactions or for BlockMaxWait, whichever comes first. Field names match
+// the flat node/network JSON configuration.
+type BlockLimits struct {
+	MinBlockTXs, MaxBlockTXs, MaxBlockBytes int
+}
+
 type Config struct {
-	ID                                                                                                                      int
-	ChainID                                                                                                                 string
-	F                                                                                                                       int
-	Validators                                                                                                              []types.ValidatorID
-	PrivateKey                                                                                                              ed25519.PrivateKey
-	BaseTimeout, RetryInterval, TargetHeights, BlockMaxWait                                                                 uint64
-	MempoolTTL                                                                                                              uint64
-	Store                                                                                                                   *ledger.Store
-	Behavior                                                                                                                string
-	MempoolBytes, MaxTxBytes, AccountSlots, AccountQueue, GlobalSlots, GlobalQueue, MinBlockTXs, MaxBlockTXs, MaxBlockBytes int
-	Recover                                                                                                                 bool // Full sync: replay and verify the local ledger before joining.
+	ID         int
+	ChainID    string
+	F          int
+	Validators []types.ValidatorID
+	PrivateKey ed25519.PrivateKey
+	// Durations are in Port.Schedule units (milliseconds for real nodes).
+	BaseTimeout, RetryInterval, BlockMaxWait, MempoolTTL uint64
+	TargetHeights                                        uint64
+	Store                                                *ledger.Store
+	Behavior                                             Behavior
+	Mempool                                              mempool.Limits
+	Blocks                                               BlockLimits
+	Recover                                              bool // Full sync: replay and verify the local ledger before joining.
 }
-type wireHeader struct {
-	Proposal *cons.Proposal  `json:",omitempty"`
-	Decision *cons.Finalized `json:",omitempty"`
-}
+
+// advertised is a header this node announced, with the body it serves on request.
 type advertised struct {
 	ref           types.Hash
 	header, body  []byte
@@ -61,21 +70,21 @@ type slot struct{ height, round uint64 }
 const decisionRetryEvery = 4
 
 type Runtime struct {
-	port                       Port
-	id                         int
-	identity                   types.ValidatorID
-	engine                     *cons.Engine
-	chain                      string
-	target, retry              uint64
-	silent                     bool
-	store                      *ledger.Store
-	pool                       *mempool.Pool
-	localTX                    map[types.Hash]types.Transaction
-	behavior                   string
-	key                        ed25519.PrivateKey
-	maxBlockTXs, maxBlockBytes int
-	minBlockTXs                int
-	blockMaxWait               uint64
+	port          Port
+	id            int
+	identity      types.ValidatorID
+	engine        *cons.Engine
+	chain         string
+	target, retry uint64
+	store         *ledger.Store
+	pool          *mempool.Pool
+	localTX       map[types.Hash]types.Transaction
+	behavior      Behavior
+	key           ed25519.PrivateKey
+	blocks        struct {
+		BlockLimits
+		wait uint64
+	}
 	mempoolTTL                 uint64
 	batchEpoch                 uint64
 	batchScheduled, batchReady bool
@@ -83,12 +92,12 @@ type Runtime struct {
 	attempted                  map[slot]bool
 	ads                        []advertised
 	votes                      []types.Vote
-	remote                     map[remoteKey]wireHeader
+	remote                     map[remoteKey]WireHeader
 	decisionRetry              uint8
 }
 
 func New(c Config, port Port) (*Runtime, error) {
-	if port == nil || c.Store == nil || c.ID < 0 || c.ID >= len(c.Validators) || c.TargetHeights == 0 || c.RetryInterval == 0 || c.MempoolTTL == 0 || c.AccountSlots < 1 || c.AccountQueue < 1 || c.GlobalSlots < c.AccountSlots || c.GlobalQueue < c.AccountQueue {
+	if port == nil || c.Store == nil || c.ID < 0 || c.ID >= len(c.Validators) || c.TargetHeights == 0 || c.RetryInterval == 0 || c.MempoolTTL == 0 || c.Mempool.Validate() != nil {
 		return nil, fmt.Errorf("invalid node configuration")
 	}
 	e, err := cons.New(cons.Config{ChainID: c.ChainID, Validators: c.Validators, F: c.F, PrivateKey: c.PrivateKey, BaseTimeout: c.BaseTimeout, Persist: c.Store.Append})
@@ -103,13 +112,14 @@ func New(c Config, port Port) (*Runtime, error) {
 			return nil, err
 		}
 	}
-	if c.MinBlockTXs == 0 {
-		c.MinBlockTXs = 1 // Direct unit/runtime users retain the old immediate behavior.
+	if c.Blocks.MinBlockTXs == 0 {
+		c.Blocks.MinBlockTXs = 1 // Direct unit/runtime users retain the old immediate behavior.
 	}
 	if c.BlockMaxWait == 0 {
 		c.BlockMaxWait = c.BaseTimeout
 	}
-	n := &Runtime{port: port, id: c.ID, identity: c.Validators[c.ID], engine: e, chain: c.ChainID, target: c.TargetHeights, retry: c.RetryInterval, attempted: make(map[slot]bool), remote: make(map[remoteKey]wireHeader), store: c.Store, pool: mempool.New(c.GlobalSlots, c.GlobalQueue, c.AccountSlots, c.AccountQueue, c.MempoolBytes, c.MaxTxBytes), localTX: make(map[types.Hash]types.Transaction), behavior: c.Behavior, key: append(ed25519.PrivateKey(nil), c.PrivateKey...), minBlockTXs: c.MinBlockTXs, blockMaxWait: c.BlockMaxWait, mempoolTTL: c.MempoolTTL, maxBlockTXs: c.MaxBlockTXs, maxBlockBytes: c.MaxBlockBytes}
+	n := &Runtime{port: port, id: c.ID, identity: c.Validators[c.ID], engine: e, chain: c.ChainID, target: c.TargetHeights, retry: c.RetryInterval, attempted: make(map[slot]bool), remote: make(map[remoteKey]WireHeader), store: c.Store, pool: mempool.New(c.Mempool), localTX: make(map[types.Hash]types.Transaction), behavior: c.Behavior, key: append(ed25519.PrivateKey(nil), c.PrivateKey...), mempoolTTL: c.MempoolTTL}
+	n.blocks.BlockLimits, n.blocks.wait = c.Blocks, c.BlockMaxWait
 	return n, nil
 }
 func (n *Runtime) Start() error {
@@ -123,31 +133,64 @@ func (n *Runtime) Status() cons.Status            { return n.engine.Status() }
 func (n *Runtime) AccountNonce(sender types.PublicKey) uint64 {
 	return n.engine.State().LastNonce(sender)
 }
-func (n *Runtime) MempoolSnapshot() []types.Transaction {
-	return n.pool.Snapshot()
+func (n *Runtime) MempoolSnapshot() []types.Transaction { return n.pool.Snapshot() }
+func (n *Runtime) StateSnapshot() state.Snapshot        { return n.engine.State().Snapshot() }
+
+// record logs a node-local event; recordPeer logs one about a peer's message.
+func (n *Runtime) record(ev network.Event) { n.recordPeer(-1, ev) }
+func (n *Runtime) recordPeer(peer int, ev network.Event) {
+	ev.Node, ev.Peer = n.id, peer
+	n.port.Record(ev)
 }
-func (n *Runtime) StateSnapshot() state.Snapshot { return n.engine.State().Snapshot() }
-func (n *Runtime) send(peer int, m network.Message) error {
-	if n.silent {
+
+// engineFailure turns a rejected input into a logged event. Persistence
+// failures are fatal and returned; everything else is a peer/protocol fault.
+func (n *Runtime) engineFailure(err error, peer int, ev network.Event) error {
+	if err == nil {
 		return nil
 	}
-	err := n.port.Send(peer, m)
+	if errors.Is(err, cons.ErrPersistence) {
+		return err
+	}
+	ev.Reason = err.Error()
+	n.recordPeer(peer, ev)
+	return nil
+}
+
+// ignoreQueueFull treats outbound back-pressure as already logged; the
+// periodic retry will send again.
+func ignoreQueueFull(err error) error {
 	if errors.Is(err, network.ErrQueueFull) {
 		return nil
-	} // Logged admission failure; periodic retry will try again.
+	}
 	return err
+}
+
+func (n *Runtime) send(peer int, m network.Message) error {
+	return ignoreQueueFull(n.port.Send(peer, m))
 }
 func (n *Runtime) broadcast(m network.Message) error {
 	return n.send(network.Broadcast, m)
 }
+func (n *Runtime) broadcastVote(v types.Vote) error {
+	payload, err := json.Marshal(v)
+	if err != nil {
+		return err
+	}
+	return n.broadcast(network.Message{Kind: network.Vote, Height: v.Height, Round: v.Round, Data: payload})
+}
 func (n *Runtime) announce(a advertised) error {
 	return n.broadcast(network.Message{Kind: network.Header, Ref: a.ref, Height: a.height, Round: a.round, Data: a.header})
 }
-func (n *Runtime) advertise(h wireHeader, body types.BlockBody, height, round uint64, decision bool) error {
+
+// advertise announces a header. Proposal bodies are kept in RAM; finalized
+// bodies are read from LevelDB on request.
+func (n *Runtime) advertise(h WireHeader, body types.BlockBody) error {
 	header, err := json.Marshal(h)
 	if err != nil {
 		return err
 	}
+	decision := h.Decision != nil
 	var payload []byte
 	if !decision {
 		payload, err = json.Marshal(body)
@@ -155,58 +198,23 @@ func (n *Runtime) advertise(h wireHeader, body types.BlockBody, height, round ui
 			return err
 		}
 	}
+	height, round := h.Scope()
 	a := advertised{ref: crypt.HashBytes(header), header: header, body: payload, height: height, round: round, decision: decision}
-	// Finalized bodies are read from LevelDB on request.
 	n.ads = append(n.ads, a)
 	return n.announce(a)
 }
 
-// equivocate signs and broadcasts a second vote for the same height, round and
-// phase that conflicts with v (nil <-> block), so peers can observe real
-// double-signing from a Byzantine validator. It never re-signs honestly.
-func (n *Runtime) equivocate(v types.Vote) error {
-	w := v
-	if v.IsNil {
-		w.IsNil, w.BlockHash = false, crypt.HashBytes([]byte("equivocation"))
-	} else {
-		w.IsNil, w.BlockHash = true, types.Hash{}
-	}
-	w, err := crypt.SignVote(w, n.key)
-	if err != nil {
-		return err
-	}
-	payload, err := json.Marshal(w)
-	if err != nil {
-		return err
-	}
-	n.port.Record(network.Event{Node: n.id, Peer: -1, Event: "behavior_message", Height: w.Height, Round: w.Round, Phase: uint8(w.Phase), Reason: "equivocate"})
-	return n.broadcast(network.Message{Kind: network.Vote, Height: w.Height, Round: w.Round, Data: payload})
-}
-
+// process lets this node propose if it is its turn, then publishes and
+// schedules everything the engine produced.
 func (n *Runtime) process() error {
-	s := n.engine.Status()
-	if !n.silent && s.Height <= n.target && s.Step == cons.Propose && !n.attempted[slot{s.Height, s.Round}] && n.engine.Proposer(s.Height, s.Round) == n.identity {
-		if n.behavior == "crashed_proposer" {
-			n.port.Record(network.Event{Node: n.id, Peer: -1, Event: "proposer_crash", Height: s.Height, Round: s.Round})
-			return ErrCrash
-		}
-		txs := n.selectBatch()
-		if n.behavior != "silent_proposer" && n.batchEligible(txs) {
-			n.attempted[slot{s.Height, s.Round}] = true
-			if _, err := n.engine.MakeProposal(txs); err != nil {
-				if errors.Is(err, cons.ErrPersistence) {
-					return err
-				}
-				n.port.Record(network.Event{Node: n.id, Peer: -1, Event: "proposal_failed", Height: s.Height, Round: s.Round, Reason: err.Error()})
-			}
-		}
+	if err := n.maybePropose(); err != nil {
+		return err
 	}
 	o := n.engine.Drain()
 	for _, e := range o.Events {
-		n.port.Record(network.Event{Node: n.id, Peer: -1, Event: "consensus_" + e.Kind, Height: e.Height, Round: e.Round, Ref: e.Hash, Reason: e.Reason, Phase: uint8(e.Phase), Step: uint8(e.Step), Validator: hex.EncodeToString(e.Validator[:]), Proposer: &e.Proposer})
+		n.record(network.Event{Event: "consensus_" + e.Kind, Height: e.Height, Round: e.Round, Ref: e.Hash, Reason: e.Reason, Phase: uint8(e.Phase), Step: uint8(e.Step), Validator: hex.EncodeToString(e.Validator[:]), Proposer: &e.Proposer})
 	}
 	for _, timer := range o.Timers {
-		timer := timer
 		if timer.Height > n.target {
 			continue
 		}
@@ -215,98 +223,104 @@ func (n *Runtime) process() error {
 		}
 	}
 	for _, p := range o.Proposals {
-		p := p
-		if n.behavior == "invalid_signature" {
-			p.Signature[0] ^= 1
-		}
-		if n.behavior == "wrong_domain" {
-			raw, err := cons.CanonicalProposalBytes(p)
-			if err != nil {
-				return err
-			}
-			raw[5] ^= 1
-			p.Signature = types.Signature(ed25519.Sign(n.key, raw))
-		}
-		body := p.Block.Body
-		p.Block.Body = types.BlockBody{}
-		if err := n.advertise(wireHeader{Proposal: &p}, body, p.Height, p.Round, false); err != nil {
+		if err := n.publishProposal(p); err != nil {
 			return err
 		}
 	}
 	for _, v := range o.Votes {
-		if n.behavior == "invalid_signature" {
-			v.Signature[0] ^= 1
-		}
-		if n.behavior == "wrong_domain" {
-			raw, err := crypt.CanonicalVoteBytes(v)
-			if err != nil {
-				return err
-			}
-			raw[5] ^= 1
-			v.Signature = types.Signature(ed25519.Sign(n.key, raw))
-		}
-		if n.behavior == "invalid_signature" || n.behavior == "wrong_domain" {
-			n.port.Record(network.Event{Node: n.id, Peer: -1, Event: "behavior_message", Height: v.Height, Round: v.Round, Phase: uint8(v.Phase), Reason: n.behavior})
-		}
-		n.votes = append(n.votes, v)
-		payload, err := json.Marshal(v)
-		if err != nil {
+		if err := n.publishVote(v); err != nil {
 			return err
-		}
-		if err = n.broadcast(network.Message{Kind: network.Vote, Height: v.Height, Round: v.Round, Data: payload}); err != nil {
-			return err
-		}
-		if n.behavior == "equivocate" {
-			if err = n.equivocate(v); err != nil {
-				return err
-			}
 		}
 	}
 	for _, f := range o.Finalized {
-		f := f
-		n.pool.Prune(n.engine.State())
-		n.resetBatchWait()
-		if err := n.armBatchWait(); err != nil {
+		if err := n.onFinalized(f); err != nil {
 			return err
-		}
-		for id := range n.localTX {
-			if !n.pool.Contains(id) {
-				delete(n.localTX, id)
-			}
-		}
-		for k, h := range n.remote {
-			if (h.Proposal != nil && h.Proposal.Height <= f.Block.Header.Height) || (h.Decision != nil && h.Decision.Block.Header.Height <= f.Block.Header.Height) {
-				delete(n.remote, k)
-			}
-		}
-		retained := make([]advertised, 0, len(n.ads))
-		for _, a := range n.ads {
-			if a.decision {
-				retained = append(retained, a)
-			}
-		}
-		n.ads = retained
-		pendingVotes := n.votes[:0]
-		for _, v := range n.votes {
-			if v.Height > f.Block.Header.Height {
-				pendingVotes = append(pendingVotes, v)
-			}
-		}
-		n.votes = pendingVotes
-		n.port.Record(network.Event{Node: n.id, Peer: -1, Event: "state_commit", Height: f.Block.Header.Height, Round: f.Round, StateRoot: hex.EncodeToString(f.Block.Header.StateRoot[:])})
-		body := f.Block.Body
-		f.Block.Body = types.BlockBody{}
-		if err := n.advertise(wireHeader{Decision: &f}, body, f.Block.Header.Height, f.Round, true); err != nil {
-			return err
-		}
-		if n.behavior == "replay_transaction" && n.replay != nil {
-			if err := n.gossipTX(*n.replay); err != nil {
-				return err
-			}
-			n.port.Record(network.Event{Node: n.id, Peer: -1, Event: "transaction_replay", Height: f.Block.Header.Height})
 		}
 	}
 	return nil
+}
+
+func (n *Runtime) maybePropose() error {
+	s := n.engine.Status()
+	if s.Height > n.target || s.Step != cons.Propose || n.attempted[slot{s.Height, s.Round}] || n.engine.Proposer(s.Height, s.Round) != n.identity {
+		return nil
+	}
+	propose, err := n.proposerTurn(s)
+	if err != nil {
+		return err
+	}
+	txs := n.selectBatch()
+	if !propose || !n.batchEligible(txs) {
+		return nil
+	}
+	n.attempted[slot{s.Height, s.Round}] = true
+	_, err = n.engine.MakeProposal(txs)
+	return n.engineFailure(err, -1, network.Event{Event: "proposal_failed", Height: s.Height, Round: s.Round})
+}
+
+func (n *Runtime) publishProposal(p cons.Proposal) error {
+	if err := n.tamperProposal(&p); err != nil {
+		return err
+	}
+	body := p.Block.Body
+	p.Block.Body = types.BlockBody{}
+	return n.advertise(WireHeader{Proposal: &p}, body)
+}
+
+func (n *Runtime) publishVote(v types.Vote) error {
+	if err := n.tamperVote(&v); err != nil {
+		return err
+	}
+	n.votes = append(n.votes, v)
+	if err := n.broadcastVote(v); err != nil {
+		return err
+	}
+	return n.afterVote(v)
+}
+
+func (n *Runtime) onFinalized(f cons.Finalized) error {
+	height := f.Block.Header.Height
+	n.pool.Prune(n.engine.State())
+	n.resetBatchWait()
+	if err := n.armBatchWait(); err != nil {
+		return err
+	}
+	n.pruneThrough(height)
+	n.record(network.Event{Event: "state_commit", Height: height, Round: f.Round, StateRoot: hex.EncodeToString(f.Block.Header.StateRoot[:])})
+	body := f.Block.Body
+	f.Block.Body = types.BlockBody{}
+	if err := n.advertise(WireHeader{Decision: &f}, body); err != nil {
+		return err
+	}
+	return n.afterFinalize(height)
+}
+
+// pruneThrough drops per-height state that a decision at height made obsolete.
+func (n *Runtime) pruneThrough(height uint64) {
+	for id := range n.localTX {
+		if !n.pool.Contains(id) {
+			delete(n.localTX, id)
+		}
+	}
+	for k, h := range n.remote {
+		if hh, _ := h.Scope(); hh <= height {
+			delete(n.remote, k)
+		}
+	}
+	retained := make([]advertised, 0, len(n.ads))
+	for _, a := range n.ads {
+		if a.decision {
+			retained = append(retained, a)
+		}
+	}
+	n.ads = retained
+	pending := n.votes[:0]
+	for _, v := range n.votes {
+		if v.Height > height {
+			pending = append(pending, v)
+		}
+	}
+	n.votes = pending
 }
 
 func (n *Runtime) scheduleTimer(timer cons.Timer) error {
@@ -321,280 +335,157 @@ func (n *Runtime) scheduleTimer(timer cons.Timer) error {
 			return n.scheduleTimer(timer)
 		}
 		if err := n.engine.Timeout(timer); err != nil {
-			n.port.Record(network.Event{Node: n.id, Peer: -1, Event: "timer_reject", Height: timer.Height, Round: timer.Round, Reason: err.Error()})
+			n.record(network.Event{Event: "timer_reject", Height: timer.Height, Round: timer.Round, Reason: err.Error()})
 		}
 		return n.process()
 	})
 }
 
+// scheduleRetry periodically re-sends current-round headers and votes, old
+// decisions (less often) and this node's pending client transactions.
 func (n *Runtime) scheduleRetry() error {
 	return n.port.Schedule(n.retry, func() error {
-		if !n.silent {
-			s := n.engine.Status()
-			n.decisionRetry = (n.decisionRetry + 1) % decisionRetryEvery
-			for _, a := range n.ads {
-				if a.decision && n.decisionRetry != 0 {
-					continue
-				}
-				if a.decision || (a.height == s.Height && a.round == s.Round) {
-					if err := n.announce(a); err != nil {
-						return err
-					}
-				}
-			}
-			for _, v := range n.votes {
-				if v.Height != s.Height || v.Round != s.Round {
-					continue
-				}
-				payload, err := json.Marshal(v)
-				if err != nil {
-					return err
-				}
-				if err = n.broadcast(network.Message{Kind: network.Vote, Height: v.Height, Round: v.Round, Data: payload}); err != nil {
-					return err
-				}
-			}
-			for id, tx := range n.localTX {
-				if n.pool.Contains(id) {
-					if err := n.gossipTX(tx); err != nil {
-						return err
-					}
-				}
-			}
+		if err := n.retryOnce(); err != nil {
+			return err
 		}
 		return n.scheduleRetry()
 	})
 }
 
-func (n *Runtime) Receive(p network.Packet) error {
-	if n.silent {
-		return nil
+func (n *Runtime) retryOnce() error {
+	s := n.engine.Status()
+	n.decisionRetry = (n.decisionRetry + 1) % decisionRetryEvery
+	for _, a := range n.ads {
+		if a.decision && n.decisionRetry != 0 {
+			continue
+		}
+		if a.decision || (a.height == s.Height && a.round == s.Round) {
+			if err := n.announce(a); err != nil {
+				return err
+			}
+		}
 	}
-	switch p.Kind {
-	case network.Transaction:
-		var tx types.Transaction
-		if err := json.Unmarshal(p.Data, &tx); err != nil {
-			return network.Reject(err)
+	for _, v := range n.votes {
+		if v.Height == s.Height && v.Round == s.Round {
+			if err := n.broadcastVote(v); err != nil {
+				return err
+			}
 		}
-		if err := n.admit(tx); err != nil {
-			return network.Reject(err)
-		}
-		if n.behavior == "duplicate_transaction" {
+	}
+	for id, tx := range n.localTX {
+		if n.pool.Contains(id) {
 			if err := n.gossipTX(tx); err != nil {
 				return err
 			}
-			if err := n.gossipTX(tx); err != nil {
-				return err
-			}
 		}
-		return n.process()
-	case network.Header:
-		var h wireHeader
-		if err := json.Unmarshal(p.Data, &h); err != nil {
-			return network.Reject(err)
-		}
-		if (h.Proposal == nil) == (h.Decision == nil) {
-			return network.Reject(fmt.Errorf("header must contain exactly one envelope"))
-		}
-		var err error
-		if h.Proposal != nil {
-			if h.Proposal.Height != p.Height || h.Proposal.Round != p.Round {
-				return network.Reject(fmt.Errorf("proposal transport scope mismatch"))
-			}
-			if len(h.Proposal.Block.Body.Transactions) > 0 {
-				return network.Reject(fmt.Errorf("header contains body"))
-			}
-			err = n.engine.ValidateProposalHeader(*h.Proposal)
-		} else {
-			if h.Decision.Block.Header.Height != p.Height || h.Decision.Round != p.Round {
-				return network.Reject(fmt.Errorf("decision transport scope mismatch"))
-			}
-			if len(h.Decision.Block.Body.Transactions) > 0 {
-				return network.Reject(fmt.Errorf("decision header contains body"))
-			}
-			err = n.engine.ValidateDecisionHeader(*h.Decision)
-		}
-		if err != nil {
-			return network.Reject(err)
-		}
-		n.remote[remoteKey{p.From, p.Ref}] = h
-		err = n.port.AcceptHeader(p.From, p.Ref, p.Height, p.Round)
-		if errors.Is(err, network.ErrQueueFull) {
-			return nil
-		}
-		return err
-	case network.Request:
-		for _, a := range n.ads {
-			if a.ref == p.Ref {
-				if a.decision {
-					f, err := n.store.Get(a.height)
-					if err != nil {
-						return err
-					}
-					body, err := json.Marshal(f.Block.Body)
-					if err != nil {
-						return err
-					}
-					a.body = body
-				}
-				return n.send(p.From, network.Message{Kind: network.Body, Ref: p.Ref, Height: a.height, Round: a.round, Data: a.body})
-			}
-		}
-		return network.Reject(fmt.Errorf("requested body unavailable"))
-	case network.Body:
-		h, ok := n.remote[remoteKey{p.From, p.Ref}]
-		if !ok {
-			return network.Reject(fmt.Errorf("body has no accepted matching header"))
-		}
-		var body types.BlockBody
-		if err := json.Unmarshal(p.Data, &body); err != nil {
-			return network.Reject(err)
-		}
-		var header types.BlockHeader
-		if h.Proposal != nil {
-			header = h.Proposal.Block.Header
-		} else {
-			header = h.Decision.Block.Header
-		}
-		if header.Height != p.Height {
-			return network.Reject(fmt.Errorf("body transport height mismatch"))
-		}
-		hash, err := crypt.BodyHash(n.chain, body)
-		if err != nil {
-			return network.Reject(err)
-		}
-		if hash != header.BodyHash {
-			return network.Reject(fmt.Errorf("body commitment mismatch"))
-		}
-		if h.Proposal != nil {
-			proposal := *h.Proposal
-			proposal.Block.Body = body
-			err = n.engine.ReceiveProposal(proposal)
-		} else {
-			decision := *h.Decision
-			decision.Block.Body = body
-			err = n.engine.ReceiveFinalized(decision)
-		}
-		if err != nil {
-			if errors.Is(err, cons.ErrPersistence) {
-				return err
-			}
-			n.port.Record(network.Event{Node: n.id, Peer: p.From, Event: "reject", Type: p.Kind, Height: p.Height, Round: p.Round, Ref: p.Ref, Reason: err.Error()})
-		}
-		return n.process()
-	case network.Vote:
-		var v types.Vote
-		if err := json.Unmarshal(p.Data, &v); err != nil {
-			return network.Reject(err)
-		}
-		if v.Height != p.Height || v.Round != p.Round {
-			return network.Reject(fmt.Errorf("vote transport scope mismatch"))
-		}
-		if err := n.engine.ReceiveVote(v); err != nil {
-			if errors.Is(err, cons.ErrPersistence) {
-				return err
-			}
-			n.port.Record(network.Event{Node: n.id, Peer: p.From, Event: "reject", Type: p.Kind, Height: v.Height, Round: v.Round, Ref: v.BlockHash, Phase: uint8(v.Phase), Validator: hex.EncodeToString(v.Validator[:]), Reason: err.Error()})
-		}
-		return n.process()
-	}
-	return network.Reject(fmt.Errorf("unknown message kind"))
-}
-
-var ErrCrash = errors.New("configured proposer crash")
-
-func (n *Runtime) gossipTX(tx types.Transaction) error {
-	b, err := json.Marshal(tx)
-	if err != nil {
-		return err
-	}
-	return n.broadcast(network.Message{Kind: network.Transaction, Data: b})
-}
-func (n *Runtime) admit(tx types.Transaction) error {
-	id, err := n.pool.Admit(n.chain, n.engine.State(), tx)
-	if err != nil {
-		n.port.Record(network.Event{Node: n.id, Peer: -1, Event: "transaction_reject", Reason: err.Error()})
-		return err
-	}
-	if n.behavior == "replay_transaction" && n.replay == nil {
-		copyTX := tx
-		copyTX.Value = append([]byte(nil), tx.Value...)
-		n.replay = &copyTX
-	}
-	if err := n.port.Schedule(n.mempoolTTL, func() error {
-		if !n.pool.Remove(id) {
-			return nil
-		}
-		delete(n.localTX, id)
-		n.resetBatchWait()
-		n.port.Record(network.Event{Node: n.id, Peer: -1, Event: "mempool_evict", Ref: id, Reason: fmt.Sprintf("ttl_ms=%d pending=%d", n.mempoolTTL, n.pool.Len())})
-		if err := n.armBatchWait(); err != nil {
-			return err
-		}
-		return n.process()
-	}); err != nil {
-		n.pool.Remove(id)
-		return err
-	}
-	n.port.Record(network.Event{Node: n.id, Peer: -1, Event: "mempool_accept", Ref: id, Reason: fmt.Sprintf("pending=%d nonce=%d", n.pool.Len(), tx.Nonce)})
-	return n.armBatchWait()
-}
-
-func (n *Runtime) armBatchWait() error {
-	if n.pool.Len() == 0 || n.batchScheduled || n.batchReady {
-		return nil
-	}
-	n.batchScheduled = true
-	epoch := n.batchEpoch
-	if err := n.port.Schedule(n.blockMaxWait, func() error {
-		if epoch != n.batchEpoch {
-			return nil
-		}
-		n.batchScheduled = false
-		if n.pool.Len() == 0 {
-			return nil
-		}
-		n.batchReady = true
-		n.port.Record(network.Event{Node: n.id, Peer: -1, Event: "block_wait_elapsed", Reason: fmt.Sprintf("pending=%d", n.pool.Len())})
-		return n.process()
-	}); err != nil {
-		n.batchScheduled = false
-		return err
 	}
 	return nil
 }
 
-func (n *Runtime) selectBatch() []types.Transaction {
-	return n.pool.Select(n.engine.State(), n.maxBlockTXs, n.maxBlockBytes)
+// Receive handles one authenticated transport packet. Invalid peer input is
+// returned as network.Reject; any other error is fatal for the node.
+func (n *Runtime) Receive(p network.Packet) error {
+	switch p.Kind {
+	case network.Transaction:
+		return n.onTransaction(p)
+	case network.Header:
+		return n.onHeader(p)
+	case network.Request:
+		return n.onRequest(p)
+	case network.Body:
+		return n.onBody(p)
+	case network.Vote:
+		return n.onVote(p)
+	}
+	return network.Reject(fmt.Errorf("unknown message kind"))
 }
 
-func (n *Runtime) batchEligible(txs []types.Transaction) bool {
-	return len(txs) > 0 && (len(txs) >= n.minBlockTXs || n.batchReady)
-}
-
-func (n *Runtime) resetBatchWait() {
-	n.batchEpoch++
-	n.batchScheduled = false
-	n.batchReady = false
-}
-func (n *Runtime) Submit(tx types.Transaction) error {
+func (n *Runtime) onTransaction(p network.Packet) error {
+	var tx types.Transaction
+	if err := json.Unmarshal(p.Data, &tx); err != nil {
+		return network.Reject(err)
+	}
 	if err := n.admit(tx); err != nil {
 		return network.Reject(err)
 	}
-	id, err := crypt.TransactionID(tx)
-	if err != nil {
+	if err := n.duplicateGossip(tx, 2); err != nil {
 		return err
 	}
-	copyTX := tx
-	copyTX.Value = append([]byte(nil), tx.Value...)
-	n.localTX[id] = copyTX
-	if err := n.gossipTX(tx); err != nil {
-		return err
+	return n.process()
+}
+
+func (n *Runtime) onHeader(p network.Packet) error {
+	var h WireHeader
+	if err := json.Unmarshal(p.Data, &h); err != nil {
+		return network.Reject(err)
 	}
-	if n.behavior == "duplicate_transaction" {
-		if err := n.gossipTX(tx); err != nil {
-			return err
+	if err := h.check(); err != nil {
+		return network.Reject(err)
+	}
+	if err := h.validate(n.engine, p.Height, p.Round); err != nil {
+		return network.Reject(err)
+	}
+	n.remote[remoteKey{p.From, p.Ref}] = h
+	return ignoreQueueFull(n.port.AcceptHeader(p.From, p.Ref, p.Height, p.Round))
+}
+
+func (n *Runtime) onRequest(p network.Packet) error {
+	for _, a := range n.ads {
+		if a.ref != p.Ref {
+			continue
 		}
+		if a.decision {
+			f, err := n.store.Get(a.height)
+			if err != nil {
+				return err
+			}
+			if a.body, err = json.Marshal(f.Block.Body); err != nil {
+				return err
+			}
+		}
+		return n.send(p.From, network.Message{Kind: network.Body, Ref: p.Ref, Height: a.height, Round: a.round, Data: a.body})
+	}
+	return network.Reject(fmt.Errorf("requested body unavailable"))
+}
+
+func (n *Runtime) onBody(p network.Packet) error {
+	h, ok := n.remote[remoteKey{p.From, p.Ref}]
+	if !ok {
+		return network.Reject(fmt.Errorf("body has no accepted matching header"))
+	}
+	var body types.BlockBody
+	if err := json.Unmarshal(p.Data, &body); err != nil {
+		return network.Reject(err)
+	}
+	header := h.Header()
+	if header.Height != p.Height {
+		return network.Reject(fmt.Errorf("body transport height mismatch"))
+	}
+	hash, err := crypt.BodyHash(n.chain, body)
+	if err != nil {
+		return network.Reject(err)
+	}
+	if hash != header.BodyHash {
+		return network.Reject(fmt.Errorf("body commitment mismatch"))
+	}
+	err = h.deliver(n.engine, body)
+	if err = n.engineFailure(err, p.From, network.Event{Event: "reject", Type: p.Kind, Height: p.Height, Round: p.Round, Ref: p.Ref}); err != nil {
+		return err
+	}
+	return n.process()
+}
+
+func (n *Runtime) onVote(p network.Packet) error {
+	var v types.Vote
+	if err := json.Unmarshal(p.Data, &v); err != nil {
+		return network.Reject(err)
+	}
+	if v.Height != p.Height || v.Round != p.Round {
+		return network.Reject(fmt.Errorf("vote transport scope mismatch"))
+	}
+	err := n.engine.ReceiveVote(v)
+	if err = n.engineFailure(err, p.From, network.Event{Event: "reject", Type: p.Kind, Height: v.Height, Round: v.Round, Ref: v.BlockHash, Phase: uint8(v.Phase), Validator: hex.EncodeToString(v.Validator[:])}); err != nil {
+		return err
 	}
 	return n.process()
 }

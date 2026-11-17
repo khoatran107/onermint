@@ -1,14 +1,13 @@
 """Plumbing shared by the T1-T8 scenario scripts: config, cluster process control, queries.
 
-The scenario files themselves hold the fault setup, the spam loop and the checks.
+A scenario file holds only its fault setup and its specific checks; `scenario()` runs the
+common flow: start the cluster, submit COUNT transactions, wait, check agreement.
 """
 
 import json
 import os
 from pathlib import Path
 import shutil
-import signal
-import subprocess
 import sys
 import time
 from urllib.request import urlopen
@@ -19,6 +18,9 @@ import run as launcher  # noqa: E402
 from client import Node, RPCError, Wallet  # noqa: E402
 
 FAILED = []
+DEFAULT_NETWORK = {"BaseTimeoutMS": 1000}  # Short rounds keep fault scenarios quick.
+DEFAULT_COUNT = 30
+SUBMIT_VIA = 9  # The last node is honest in every scenario.
 
 
 def check(condition, message):
@@ -37,6 +39,45 @@ def faults(seed, **policy):
     return {"all": {"Faults": dict(Seed=seed, **policy)}}
 
 
+def behaviors(behavior, *nodes):
+    """Give the listed node IDs one Byzantine behaviour."""
+    return {node: {"Behavior": behavior} for node in nodes}
+
+
+def run(name, network=None, nodes=None, count=DEFAULT_COUNT, wait_nodes=None, timeout=90, checks=None):
+    """One cluster run: submit `count` transactions, wait, check agreement, then `checks(net)`.
+
+    Returns check_agreement's (state root, [(sender, nonce)])."""
+    with Cluster(name, DEFAULT_NETWORK if network is None else network, nodes) as net:
+        net.spam(count)
+        net.wait_finalized(count, nodes=wait_nodes, timeout=timeout)
+        result = net.check_agreement(count)
+        if checks:
+            checks(net)
+    return result
+
+
+def scenario(name, **kwargs):
+    """`run` once and exit with the scenario's PASS/FAIL status."""
+    run(name, **kwargs)
+    finish(name)
+
+
+# --- checks shared by more than one scenario --------------------------------
+def check_signature_rejected(net, faulty=(0,)):
+    """T3: the faulty node really misbehaved and honest nodes logged why they rejected it."""
+    check(net.count("behavior_message", nodes=list(faulty)) > 0, f"node {', '.join(map(str, faulty))} really sent faulty messages")
+    reasons = net.reasons()
+    check(any("signature" in r for r in reasons),
+          f"bad signatures were rejected with a logged reason: {dict(sorted(reasons.items())[:4])}")
+
+
+def check_timeout_recovered(net):
+    """T6: height 1 had no usable proposal in round 0, so it was decided later."""
+    first = net.ledger(SUBMIT_VIA)[0]
+    check(first["Round"] >= 1, f"height 1 could only finish after a timeout (decided in round {first['Round']})")
+
+
 class Cluster:
     """n=10, f=3 local cluster for one scenario, created under config/<name>."""
 
@@ -53,8 +94,9 @@ class Cluster:
             shutil.rmtree(self.output)  # Only this scenario's own scratch output.
 
     def _create(self, network, nodes):
-        subprocess.run([sys.executable, str(REPO / "tests" / "run.py"),
-                        "--init", self.name, "--f", "3", "--go", self.go], cwd=REPO, check=True)
+        launcher.prepare_cluster(self.go, self.name, 3, launcher.DEFAULT_MEMPOOL_TTL_MS,
+                                 launcher.DEFAULT_ACCOUNT_SLOTS, launcher.DEFAULT_ACCOUNT_QUEUE,
+                                 launcher.DEFAULT_GLOBAL_SLOTS, launcher.DEFAULT_GLOBAL_QUEUE)
         shared = self.directory / "network.json"
         data = json.loads(shared.read_text(encoding="utf-8"))
         data.update(network)
@@ -77,35 +119,34 @@ class Cluster:
         self.stop()
 
     def start(self):
-        self.binary = launcher.build_node(self.go)
-        for path, config, _ in self.configs:
-            self.procs[config["NodeID"]] = subprocess.Popen([str(self.binary), "-config", str(path)], cwd=REPO)
+        binary = launcher.build_node(self.go)
+        for (_, config, _), proc in zip(self.configs, launcher.start_nodes(binary, self.configs)):
+            self.procs[config["NodeID"]] = proc
         deadline = time.monotonic() + 120
         for node in self.honest:
             while True:
                 try:
                     self.status(node)
                     break
-                except OSError:
+                except (OSError, ValueError):  # ValueError: admin address not written yet.
                     if time.monotonic() > deadline:
                         raise RuntimeError(f"node {node} never answered /status")
                     time.sleep(0.3)
         time.sleep(5)  # GossipSub meshes need a moment before the first transaction.
 
     def stop(self):
-        for proc in self.procs.values():
-            if proc.poll() is None:
-                proc.send_signal(signal.SIGINT)
-        deadline = time.monotonic() + 8
-        for proc in self.procs.values():
-            try:
-                proc.wait(timeout=max(0.1, deadline - time.monotonic()))
-            except subprocess.TimeoutExpired:
-                proc.kill()
-                proc.wait()
+        launcher.interrupt_processes(list(self.procs.values()))
+
+    def _url(self, node):
+        return launcher.admin_url(*self.configs[node])
 
     # --- client side -------------------------------------------------------
-    def submit(self, nonce, key="spam", value=None, via=9):
+    def spam(self, count, via=SUBMIT_VIA):
+        """Submit transactions 1..count, each setting "spam" = "value-<nonce>"."""
+        for nonce in range(1, count + 1):
+            self.submit(nonce, key="spam", value=f"value-{nonce}", via=via)
+
+    def submit(self, nonce, key="spam", value=None, via=SUBMIT_VIA):
         """Send `key` = `value` as transaction `nonce` to node `via`, signed by the external client key.
 
         Signing and the JSON-RPC call happen here (tests/client.py); the node binary is not
@@ -118,8 +159,7 @@ class Cluster:
             self._wallet = Wallet.load(self.directory / "client-key.hex",
                                        [peer["PublicKey"] for peer in network["Peers"]])
         if via not in self._nodes:
-            port = self.configs[via][1]["AdminAddress"].rpartition(":")[2]
-            self._nodes[via] = Node(f"127.0.0.1:{port}")  # AdminAddress may be 0.0.0.0
+            self._nodes[via] = Node(self._url(via))
         deadline = time.monotonic() + 60
         while True:
             try:
@@ -136,8 +176,7 @@ class Cluster:
 
     # --- queries (admin HTTP while the cluster runs, events.jsonl for the middle) ---
     def _get(self, node, path):
-        address = self.configs[node][1]["AdminAddress"]
-        with urlopen(f"http://{address}{path}", timeout=5) as response:
+        with urlopen(self._url(node) + path, timeout=5) as response:
             return json.load(response)
 
     def status(self, node):
@@ -198,3 +237,12 @@ class Cluster:
     def count(self, event, nodes=None):
         return sum(1 for n in (self.honest if nodes is None else nodes)
                    for row in self.events(n) if row["Event"] == event)
+
+    def votes_signed_per_round(self, node):
+        """{(height, round): number of votes this node signed}."""
+        signed = {}
+        for row in self.events(node):
+            if row["Event"] == "consensus_vote_signed":
+                key = (row["Height"], row.get("Round", 0))
+                signed[key] = signed.get(key, 0) + 1
+        return signed
