@@ -13,12 +13,18 @@ loki.source.file "lab01" {
   }
 }
 
-// Store each line at the time the node logged it (field "Ts"), not the time Alloy read it.
+// Store each line at the time the node logged it, not the time Alloy read it.
 // Consensus steps last milliseconds, so ingest-time stamps would scramble their order.
-// Lines without "Ts" (older runs) keep the read time.
+// Compact logs carry "Ts"; Trace logs (Trace: true, used by the T1-T8 scenarios)
+// carry "WallTime" instead. Lines with neither keep the read time.
 loki.process "lab01" {
   stage.json {
-    expressions = { ts = "Ts" }
+    expressions = { ts = "Ts", wall = "WallTime" }
+  }
+  stage.timestamp {
+    source            = "wall"
+    format            = "RFC3339Nano"
+    action_on_failure = "skip"
   }
   stage.timestamp {
     source            = "ts"

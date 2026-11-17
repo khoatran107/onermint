@@ -137,6 +137,16 @@ def allowed_exit(code, config):
     return code == 0 or (config["Behavior"] == "crashed_proposer" and code == CRASH_EXIT_CODE)
 
 
+def describe_exit(code):
+    """Readable exit status; negative codes mean "killed by signal" on POSIX."""
+    if code < 0:
+        try:
+            return f"was killed by {signal.Signals(-code).name}"
+        except ValueError:
+            return f"was killed by signal {-code}"
+    return f"exited with code {code}"
+
+
 def start_nodes(binary, configs):
     """Start one node process per (path, config, output) entry."""
     return [subprocess.Popen([str(binary), "-config", str(path)], cwd=REPO) for path, _, _ in configs]
@@ -221,6 +231,7 @@ def run_cluster(binary, configs):
         deadline = time.monotonic() + duration / 1000 + 20 if duration else None
         processes.extend(start_nodes(binary, configs))
         pending = set(range(len(processes)))
+        failed = []
         while pending:
             for index in tuple(pending):
                 process = processes[index]
@@ -229,11 +240,19 @@ def run_cluster(binary, configs):
                     continue
                 pending.remove(index)
                 if not allowed_exit(code, configs[index][1]):
-                    raise RuntimeError(f"Node PID {process.pid} exited with code {code}.")
+                    # A dead validator is just a crash fault: the others keep
+                    # running (up to f failures are tolerated by consensus).
+                    node = configs[index][1]["NodeID"]
+                    failed.append(f"node {node} ({describe_exit(code)})")
+                    print(f"Warning: node {node} (PID {process.pid}) {describe_exit(code)}; "
+                          f"{len(pending)} validator(s) still running. See {configs[index][2] / 'events.jsonl'}",
+                          file=sys.stderr, flush=True)
             if pending and deadline is not None and time.monotonic() >= deadline:
                 raise RuntimeError(f"Cluster exceeded its shutdown deadline; inspect events.jsonl in {directory}.")
             if pending:
                 time.sleep(0.1)  # Keeps Ctrl+C responsive on Windows.
+        if failed:
+            raise RuntimeError(f"Validators exited unexpectedly: {', '.join(failed)}.")
     except KeyboardInterrupt:
         interrupted = True
         print("Stopping all validator processes...", file=sys.stderr, flush=True)

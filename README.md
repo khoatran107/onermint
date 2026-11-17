@@ -138,6 +138,25 @@ docker compose -f logs/monitoring/docker-compose.yml restart prometheus
 Nếu dashboard báo `No data`, kiểm tra `http://127.0.0.1:9090/targets`; các node
 đang chạy phải có trạng thái `UP`.
 
+Các panel đọc log (Consensus step, Proposer per height and round, Validator
+events) hỗ trợ cả hai format của `events.jsonl`: log rút gọn (`Trace: false`) và
+log trace (`Trace: true`, mọi config T1–T8 đều bật). Nếu các panel này thiếu dữ
+liệu của lần chạy gần nhất:
+
+- Alloy đọc toàn bộ `local-runs/`. Log trace rất lớn (riêng T1 khoảng 660 MB),
+  nên lần đọc đầu cần vài phút. Theo dõi tiến độ ở
+  `http://127.0.0.1:12345/metrics`: `loki_source_file_read_bytes_total` phải
+  tiến dần tới `loki_source_file_file_bytes_total`.
+- Nếu Alloy bị dừng trong lúc một kịch bản xóa rồi tạo lại `local-runs/<tên>`,
+  vị trí đọc cũ có thể không còn đúng. Tạo lại Loki và Alloy để đọc lại mọi log
+  từ đầu (dữ liệu Loki chỉ là bản sao của các file `events.jsonl`):
+
+```text
+docker compose -f logs/monitoring/docker-compose.yml up -d --force-recreate loki alloy
+```
+
+- Xóa các thư mục `local-runs/<tên>` không còn cần để giảm lượng log phải đọc.
+
 ```text
 docker compose -f logs/monitoring/docker-compose.yml down
 ```

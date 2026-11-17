@@ -93,7 +93,7 @@
       "id": 8,
       "type": "state-timeline",
       "title": "Consensus step (one entry per node log line)",
-      "description": "Built from consensus_step log lines, not from sampled gauges, so millisecond steps are not missed. PROPOSING = this node is the proposer of the round. Zoom to a short range: the query returns at most 5000 lines.",
+      "description": "Built from consensus_step log lines, not from sampled gauges, so millisecond steps are not missed. PROPOSING = this node is the proposer of the round. Works with both compact and Trace logs (Trace writes Step as 1/2/3). Zoom to a short range: the query returns at most 5000 lines.",
       "datasource": {"type": "loki", "uid": "loki"},
       "targets": [
         {
@@ -101,7 +101,7 @@
           "queryType": "range",
           "direction": "forward",
           "maxLines": 5000,
-          "expr": "{job=\"lab01\"} | json | Event=\"consensus_step\" | Node=~\"$node\" | label_format role=`{{ if and (eq .Step \"PROPOSE\") (eq .Proposer .Node) }}PROPOSING{{ else }}{{ .Step }}{{ end }}` | line_format `{\"node\":\"{{.Node}}\",\"state\":\"{{.role}}\"}`"
+          "expr": "{job=\"lab01\"} | json | Event=\"consensus_step\" | Node=~\"$node\" | label_format step=`{{ if eq .Step \"1\" }}PROPOSE{{ else if eq .Step \"2\" }}PREVOTE{{ else if eq .Step \"3\" }}PRECOMMIT{{ else }}{{ .Step }}{{ end }}` | label_format role=`{{ if and (eq .step \"PROPOSE\") (eq .Proposer .Node) }}PROPOSING{{ else }}{{ .step }}{{ end }}` | line_format `{\"node\":\"{{.Node}}\",\"state\":\"{{.role}}\"}`"
         }
       ],
       "transformations": [
@@ -132,7 +132,7 @@
       "id": 17,
       "type": "table",
       "title": "Proposer per height and round",
-      "description": "Which node proposes each (height, round). Round > 0 means the earlier round timed out.",
+      "description": "Which node proposes each (height, round). Round > 0 means the earlier round timed out. Log lines written before the Proposer field existed are skipped.",
       "datasource": {"type": "loki", "uid": "loki"},
       "targets": [
         {
@@ -140,7 +140,7 @@
           "queryType": "range",
           "direction": "forward",
           "maxLines": 5000,
-          "expr": "{job=\"lab01\"} | json | Event=\"consensus_step\" | Step=\"PROPOSE\" | line_format `{\"height\":\"{{.Height}}\",\"round\":\"{{.Round}}\",\"proposer\":\"{{.Proposer}}\"}`"
+          "expr": "{job=\"lab01\"} | json | Event=\"consensus_step\" | label_format step=`{{ if eq .Step \"1\" }}PROPOSE{{ else if eq .Step \"2\" }}PREVOTE{{ else if eq .Step \"3\" }}PRECOMMIT{{ else }}{{ .Step }}{{ end }}` | step=\"PROPOSE\" | Proposer!=\"\" | line_format `{\"height\":\"{{.Height}}\",\"round\":\"{{.Round}}\",\"proposer\":\"{{.Proposer}}\"}`"
         }
       ],
       "transformations": [
@@ -238,7 +238,7 @@
       "datasource": {"type": "loki", "uid": "loki"},
       "targets": [
         {
-          "expr": "{job=\"lab01\"} | json | Node=~\"$node\" | line_format \"{{.Time}} node={{.Node}} {{.Event}} height={{.Height}} round={{.Round}} {{.Detail}}\"",
+          "expr": "{job=\"lab01\"} | json | Node=~\"$node\" | line_format \"{{ or .Time .WallTime }} node={{.Node}} {{.Event}} height={{.Height}} round={{.Round}} {{ or .Detail .Reason }}\"",
           "refId": "A"
         }
       ],
