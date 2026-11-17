@@ -71,6 +71,8 @@ def main():
     print("alice:", alice.public_hex)
 
     for i in range(10000):
+        if i % 30 == 0:
+            time.sleep(5)
         attempt(f"tx{i + 1}", alice, "message", "hello blockchain")
 
     # Ví khác; nonce của mỗi ví đếm riêng.

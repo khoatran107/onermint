@@ -5,11 +5,13 @@ import (
 	"blockchain-lab01/src/ledger"
 	"blockchain-lab01/src/mempool"
 	"blockchain-lab01/src/state"
+	"bytes"
 	"crypto/ed25519"
 	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
+	"sort"
 
 	cons "blockchain-lab01/src/consensus"
 	crypt "blockchain-lab01/src/crypto"
@@ -354,9 +356,16 @@ func (n *Runtime) scheduleRetry() error {
 					return err
 				}
 			}
-			for id, tx := range n.localTX {
+			// Map order is random; re-gossip in transaction ID order so the same
+			// inputs always produce the same message sequence.
+			ids := make([]types.Hash, 0, len(n.localTX))
+			for id := range n.localTX {
+				ids = append(ids, id)
+			}
+			sort.Slice(ids, func(i, j int) bool { return bytes.Compare(ids[i][:], ids[j][:]) < 0 })
+			for _, id := range ids {
 				if n.pool.Contains(id) {
-					if err := n.gossipTX(tx); err != nil {
+					if err := n.gossipTX(n.localTX[id]); err != nil {
 						return err
 					}
 				}

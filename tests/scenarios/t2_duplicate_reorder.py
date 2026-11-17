@@ -24,6 +24,7 @@ with Cluster(NAME, NETWORK, NODES) as net:
                 key = (row["Height"], row.get("Round", 0))
                 signed[key] = signed.get(key, 0) + 1
         check(max(signed.values()) <= 2, f"node {node} signed at most 2 votes per round despite duplicates")
+    net.check_quorum_proofs()  # Counted votes: distinct validators only, never the same vote twice.
     check(any("duplicate" in r for r in net.reasons()), "duplicated proposal/body copies were rejected as duplicates")
     check(not any("conflicting vote" in r for r in net.reasons()), "no vote was mistaken for equivocation")
 

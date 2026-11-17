@@ -185,6 +185,41 @@ class Cluster:
         check(len(keys) == count, f"all {count} spam transactions finalized once (found {len(keys)})")
         return statuses[nodes[0]]["StateRoot"], keys
 
+    def check_quorum_proofs(self, quorum=7):
+        """No double-counted votes: every finalized block is carried by >= quorum PRECOMMITs
+        for that block from distinct validators (a duplicated vote would repeat a validator)."""
+        bad, blocks = [], 0
+        for node in self.honest:
+            for f in self.ledger(node):
+                blocks += 1
+                height = f["Block"]["Header"]["Height"]
+                voters = [json.dumps(v["Validator"]) for v in f["Proof"]]
+                same = all(v["Phase"] == 2 and not v["IsNil"] and v["Height"] == height
+                           and v["BlockHash"] == f["Proof"][0]["BlockHash"] for v in f["Proof"])
+                if len(voters) != len(set(voters)) or len(set(voters)) < quorum or not same:
+                    bad.append((node, height, len(voters), len(set(voters))))
+        check(blocks > 0 and not bad,
+              f"every finalized block has >= {quorum} PRECOMMITs from distinct validators, none counted twice"
+              + (f" (violations: {bad[:3]})" if bad else f" ({blocks} block proofs checked)"))
+
+    def check_no_double_finalization(self):
+        """Safety at every moment, not only at the end: from the event logs, no honest node
+        committed a height twice and no two honest nodes committed different states at a height."""
+        roots, repeated = {}, []
+        for node in self.honest:
+            seen = set()
+            for row in self.events(node):
+                if row["Event"] != "state_commit":
+                    continue
+                if row["Height"] in seen:
+                    repeated.append((node, row["Height"]))
+                seen.add(row["Height"])
+                roots.setdefault(row["Height"], set()).add(row["StateRoot"])
+        check(not repeated, f"no honest node finalized the same height twice{' ' + str(repeated[:3]) if repeated else ''}")
+        split = sorted(h for h, found in roots.items() if len(found) != 1)
+        check(roots and not split, f"each of the {len(roots)} heights was finalized with exactly one state root across honest nodes"
+              + (f" (conflicts at {split[:3]})" if split else ""))
+
     def reasons(self, nodes=None):
         """Reject reasons logged by the given nodes (default: honest) -> {reason: count}."""
         found = {}

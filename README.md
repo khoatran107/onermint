@@ -203,7 +203,7 @@ config testcase vẫn còn trong `config/<test>`.
 
 Mỗi kịch bản là một file Python độc lập trong `tests/scenarios/`, chạy không cần
 tham số. File tự tạo `config/<tên>` nếu chưa có, chạy 10 node, spam 30
-transaction bằng vòng `for` vào node 9, rồi kiểm tra: trạng thái cuối qua HTTP
+transaction (T1: 300) bằng vòng `for` vào node 9, rồi kiểm tra: trạng thái cuối qua HTTP
 admin (`/status`, `/ledger`) và các diễn biến ở giữa qua `events.jsonl`.
 
 ```text
@@ -214,21 +214,31 @@ python tests/scenarios/t7_equivocation.py
 | File | Kịch bản | Kết quả bắt buộc |
 |---|---|---|
 | `t1_normal.py` | Không lỗi | Mọi honest node cùng chain và state root |
-| `t2_duplicate_reorder.py` | Duplicate 100%, delay, reorder | Vote trùng bị từ chối, không finalize xung đột |
+| `t2_duplicate_reorder.py` | Duplicate 100%, delay, reorder | Mỗi block finalize có >= 7 PRECOMMIT từ các validator khác nhau (không vote nào bị đếm hai lần), không finalize xung đột |
 | `t3a_invalid_signature.py`, `t3b_wrong_domain.py` | Node 0 ký sai / sai domain | Message bị từ chối, lý do được log |
 | `t4_replay_duplicate_tx.py` | Node 0 replay, node 1 duplicate transaction | Mỗi `(sender, nonce)` chỉ áp dụng một lần |
-| `t5_drop_before_sync.py` | Drop 100% trong 8 giây đầu | Có drop, sau đó chain tiếp tục, không double finalize |
+| `t5_drop_before_sync.py` | Drop 30% + delay tới 300 ms trong 20 giây đầu | Nhiều height được chốt ngay khi mạng còn bất ổn; không height nào finalize hai lần hay với hai state khác nhau |
 | `t6a_silent_proposer.py`, `t6b_crashed_proposer.py` | Proposer node 0 im lặng / thoát | Height 1 xong ở round >= 1 nhờ timeout |
 | `t7_equivocation.py` | Node 0, 1, 2 ký hai vote xung đột | Honest node log `conflicting vote`, vẫn đồng thuận |
-| `t8_same_seed.py` | Seed lỗi cố định, chạy hai lần | Cùng transaction đã finalize và cùng state root |
+| `t8_same_seed.py` | Cùng seed, chạy hai lần | Mô phỏng tất định: log giống từng byte và cùng state hash. Mạng thật: cùng transaction đã finalize và cùng state root |
 
 File in `PASS`/`FAIL` cho từng kiểm tra và thoát với mã 1 nếu có lỗi. Config
 sinh ra ở `config/t*-*` có thể sửa JSON rồi chạy lại. Output nằm ở
 `local-runs/<tên>` và được xóa tự động trước mỗi lần chạy. Cần `go` trong PATH;
 nếu Go cục bộ cũ hơn `go.mod`, đặt `GOTOOLCHAIN=auto`. `harness.py` chỉ chứa
 phần chung: tạo config, chạy/dừng process, gửi transaction và đọc kết quả.
-Log không giống từng byte giữa hai lần chạy T8 vì có timestamp, nên T8 so sánh
-theo transaction đã finalize và state root.
+T8 gồm hai phần. Phần chính chạy `src/cmd/sim`: 10 validator (cùng code `runtime`
+và `consensus` của node thật) chạy trong một process trên đồng hồ ảo, mọi delay,
+drop và duplicate lấy từ seed, nên hai lần chạy cùng seed ghi ra log giống nhau
+từng byte và cùng state hash; log nằm ở `local-runs/t8-same-seed-sim/`. Phần hai
+lặp lại seed lỗi trên mạng 10 process thật; ở đó log không thể giống từng byte vì
+phụ thuộc lịch chạy của OS và đồng hồ thật, nên chỉ so transaction đã finalize và
+state root.
+
+```text
+go run ./src/cmd/sim -seed 42 -out run1.jsonl
+go run ./src/cmd/sim -seed 42 -out run2.jsonl   # cmp run1.jsonl run2.jsonl -> giống hệt
+```
 
 Spam thủ công vào một validator đang chạy bằng một vòng `for` riêng:
 

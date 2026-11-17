@@ -53,7 +53,7 @@
       "GossipAddress": "127.0.0.1:30009"
     }
   ],
-  "MinBlockTXs": 50,
+  "MinBlockTXs": 100,
   "BlockMaxWaitMS": 2000,
   "BaseTimeoutMS": 4000,
   "MaxBlockTXs": 128,

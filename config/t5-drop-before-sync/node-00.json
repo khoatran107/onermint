@@ -8,7 +8,9 @@
   "Trace": true,
   "Faults": {
     "Seed": 5,
-    "DropBPS": 10000,
-    "DisableAfterMS": 8000
+    "DropBPS": 3000,
+    "MinDelayMS": 20,
+    "MaxDelayMS": 300,
+    "DisableAfterMS": 20000
   }
 }
